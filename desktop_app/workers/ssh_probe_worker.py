@@ -2,7 +2,11 @@ import asyncio
 
 from PySide6.QtCore import QThread, Signal
 
-from core.remote.ssh_manager import SSHConfig, SSHManager
+from core.network.network_manager import NetworkManager
+from core.remote.ssh_manager import (
+    SSHConfig,
+    SSHManager,
+)
 
 
 class SSHProbeWorker(QThread):
@@ -28,18 +32,39 @@ class SSHProbeWorker(QThread):
 
     def run(self):
         try:
-            result = asyncio.run(self._probe())
+            result = asyncio.run(
+                self._probe()
+            )
+
             self.success.emit(result)
 
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(
+                f"{type(exc).__name__}: {exc}"
+            )
 
     async def _probe(self):
         ssh = SSHManager(self.config)
 
         try:
             await ssh.connect()
-            return await ssh.probe_jetson()
+
+            jetson_info = (
+                await ssh.probe_jetson()
+            )
+
+            network_manager = NetworkManager(
+                ssh
+            )
+
+            network_snapshot = (
+                await network_manager.inspect()
+            )
+
+            return {
+                "jetson": jetson_info,
+                "network": network_snapshot.to_dict(),
+            }
 
         finally:
             await ssh.disconnect()

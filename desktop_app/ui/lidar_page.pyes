@@ -134,61 +134,61 @@ class LidarPage(QWidget):
 
         root.addWidget(self.status_label)
 
-        # --------------------------------------------------
-        # Network Manager
-        # --------------------------------------------------
+	# --------------------------------------------------
+# Network Manager
+# --------------------------------------------------
 
-        network_group = QGroupBox(
-            "Jetson Network"
-        )
+network_group = QGroupBox(
+    "Jetson Network"
+)
 
-        network_layout = QVBoxLayout(
-            network_group
-        )
+network_layout = QVBoxLayout(
+    network_group
+)
 
-        self.management_label = QLabel(
-            "SSH Management: Not detected"
-        )
+self.management_label = QLabel(
+    "SSH Management: Not detected"
+)
 
-        network_layout.addWidget(
-            self.management_label
-        )
+network_layout.addWidget(
+    self.management_label
+)
 
-        self.lidar_candidate_label = QLabel(
-            "LiDAR Interface: Not detected"
-        )
+self.lidar_candidate_label = QLabel(
+    "LiDAR Interface: Not detected"
+)
 
-        network_layout.addWidget(
-            self.lidar_candidate_label
-        )
+network_layout.addWidget(
+    self.lidar_candidate_label
+)
 
-        self.network_table = QTableWidget()
+self.network_table = QTableWidget()
 
-        self.network_table.setColumnCount(6)
+self.network_table.setColumnCount(6)
 
-        self.network_table.setHorizontalHeaderLabels([
-            "Interface",
-            "IPv4",
-            "Link",
-            "Type",
-            "Role",
-            "Protected",
-        ])
+self.network_table.setHorizontalHeaderLabels([
+    "Interface",
+    "IPv4",
+    "Link",
+    "Type",
+    "Role",
+    "Protected",
+])
 
-        self.network_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
+self.network_table.horizontalHeader().setSectionResizeMode(
+    QHeaderView.Stretch
+)
 
-        self.network_table.setEditTriggers(
-            QTableWidget.NoEditTriggers
-        )
+self.network_table.setEditTriggers(
+    QTableWidget.NoEditTriggers
+)
 
-        self.network_table.setSelectionBehavior(
-            QTableWidget.SelectRows
-        )
+self.network_table.setSelectionBehavior(
+    QTableWidget.SelectRows
+)
 
-        root.addWidget(network_group)
-        network_layout.addWidget(self.network_table)
+root.addWidget(network_group)
+network_layout.addWidget(self.network_table)
 
         # --------------------------------------------------
         # Result
@@ -262,124 +262,22 @@ class LidarPage(QWidget):
 
         self.worker.start()
 
-    def on_ssh_success(self, result: dict):
+    def on_ssh_success(self, info: dict):
         self.status_label.setText(
             "SSH Status: CONNECTED"
         )
 
-        jetson = result["jetson"]
-        network = result["network"]
-
-        # --------------------------------------------------
-        # Jetson info
-        # --------------------------------------------------
-
         text = (
             f"Device model: Livox {self.selected_model}\n\n"
-            f"Jetson hostname: {jetson['hostname']}\n"
-            f"Architecture: {jetson['architecture']}\n"
-            f"Kernel: {jetson['kernel']}"
+            f"Jetson hostname: {info['hostname']}\n"
+            f"Architecture: {info['architecture']}\n"
+            f"Kernel: {info['kernel']}\n\n"
+            "Network interfaces:\n"
+            "-----------------------------------\n"
+            f"{info['network']}"
         )
 
         self.output.setPlainText(text)
-
-        # --------------------------------------------------
-        # SSH management network
-        # --------------------------------------------------
-
-        management = network["management"]
-
-        management_interface = (
-            management.get("interface")
-            or "Unknown"
-        )
-
-        management_ip = (
-            management.get("source_ip")
-            or management.get("server_ip")
-            or "Unknown"
-        )
-
-        self.management_label.setText(
-            "SSH Management: "
-            f"{management_interface} "
-            f"({management_ip})"
-        )
-
-        # --------------------------------------------------
-        # LiDAR candidate
-        # --------------------------------------------------
-
-        candidate = (
-            network.get("lidar_candidate")
-            or "NOT FOUND"
-        )
-
-        self.lidar_candidate_label.setText(
-            f"LiDAR Interface Candidate: {candidate}"
-        )
-
-        # --------------------------------------------------
-        # Interface table
-        # --------------------------------------------------
-
-        interfaces = network["interfaces"]
-
-        self.network_table.setRowCount(
-            len(interfaces)
-        )
-
-        for row, interface in enumerate(
-            interfaces
-        ):
-            ipv4 = ", ".join(
-                interface["ipv4_addresses"]
-            )
-
-            if not ipv4:
-                ipv4 = "-"
-
-            carrier = interface["carrier"]
-
-            if carrier is True:
-                link = "UP"
-            elif carrier is False:
-                link = "DOWN"
-            else:
-                link = "UNKNOWN"
-
-            if interface["wireless"]:
-                interface_type = "Wi-Fi"
-
-            elif interface["physical"]:
-                interface_type = "Ethernet"
-
-            else:
-                interface_type = "Virtual"
-
-            values = [
-                interface["name"],
-                ipv4,
-                link,
-                interface_type,
-                interface["role"],
-                (
-                    "YES"
-                    if interface["protected"]
-                    else "NO"
-                ),
-            ]
-
-            for column, value in enumerate(
-                values
-            ):
-                self.network_table.setItem(
-                    row,
-                    column,
-                    QTableWidgetItem(
-                        str(value)
-                    ),
-                )
 
     def on_ssh_failed(self, error: str):
         self.status_label.setText(
