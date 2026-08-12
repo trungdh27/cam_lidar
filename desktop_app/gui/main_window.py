@@ -22,12 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from connection.ssh_manager import SSHManager
+from connections.ssh_manager import SSHManager
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "config" / "devices.json"
-STYLE_PATH = Path(__file__).resolve().parent / "styles.qss"
+STYLE_PATH = Path(__file__).resolve().parent / "styles" / "styles.qss"
 
 
 class SSHConnectThread(QThread):

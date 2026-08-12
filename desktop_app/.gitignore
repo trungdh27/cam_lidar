@@ -1,6 +1,26 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-logs/*
-evidence/*
-database/*.db
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime output
+data/logs/*
+data/evidence/*
+data/history/*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary
+*.tmp
+*.swp
+*~
