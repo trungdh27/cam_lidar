@@ -1,0 +1,9 @@
+{
+  "jetson": {
+    "ssh": {
+      "host": "192.168.9.169",
+      "port": 22,
+      "username": "huu"
+    }
+  }
+}
