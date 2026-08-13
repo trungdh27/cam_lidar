@@ -1,28 +1,16 @@
-# Python
+.venv/
 __pycache__/
 *.py[cod]
-*.pyo
-
-# Virtual environment
-.venv/
-venv/
-
-# IDE
-.vscode/
-.idea/
-
-# Runtime data
-logs/*
-evidence/*
-database/*.db
-
-# Keep directories
-!logs/.gitkeep
-!evidence/.gitkeep
-
-# Environment / secrets
+*.log
 .env
+.idea/
+.vscode/
+data/*.db
+data/active_network_session.json
+evidence/*
+!evidence/.gitkeep
+jetson_tools/**/build/
 
-# OS
-.DS_Store
-Thumbs.db
+# Local UI backup / extracted packages
+backup_ui_before_v2/
+cam_lidar_ui_v2/

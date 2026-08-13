@@ -14,20 +14,16 @@ class InterfaceRole(str, Enum):
 class NetworkInterface:
     name: str
     ifindex: int = 0
-
     mac_address: Optional[str] = None
     mtu: Optional[int] = None
     operstate: str = "UNKNOWN"
     link_type: Optional[str] = None
-
     carrier: Optional[bool] = None
     physical: bool = False
     wireless: bool = False
-
     ipv4_addresses: list[str] = field(default_factory=list)
     ipv6_addresses: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
-
     role: InterfaceRole = InterfaceRole.IGNORED
     protected: bool = False
     reason: str = ""
@@ -56,7 +52,6 @@ class NetworkInterface:
 class ManagementConnection:
     client_ip: Optional[str] = None
     server_ip: Optional[str] = None
-
     interface: Optional[str] = None
     source_ip: Optional[str] = None
 
@@ -73,15 +68,39 @@ class ManagementConnection:
 class NetworkSnapshot:
     management: ManagementConnection
     interfaces: list[NetworkInterface]
-
     lidar_candidate: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
             "management": self.management.to_dict(),
-            "interfaces": [
-                interface.to_dict()
-                for interface in self.interfaces
-            ],
+            "interfaces": [item.to_dict() for item in self.interfaces],
             "lidar_candidate": self.lidar_candidate,
         }
+
+
+@dataclass
+class TemporaryIPState:
+    interface: str
+    cidr: str
+    previous_ipv4: list[str] = field(default_factory=list)
+    added_by_app: bool = False
+    active: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "interface": self.interface,
+            "cidr": self.cidr,
+            "previous_ipv4": self.previous_ipv4,
+            "added_by_app": self.added_by_app,
+            "active": self.active,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TemporaryIPState":
+        return cls(
+            interface=data["interface"],
+            cidr=data["cidr"],
+            previous_ipv4=data.get("previous_ipv4", []),
+            added_by_app=data.get("added_by_app", False),
+            active=data.get("active", False),
+        )

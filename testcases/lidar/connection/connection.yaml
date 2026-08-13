@@ -1,0 +1,21 @@
+tests:
+  - id: LID-CON-001
+    name: SSH Connection
+    group: Connectivity
+    automation: AUTO
+  - id: LID-CON-002
+    name: Ethernet Interface Detection
+    group: Connectivity
+    automation: AUTO
+  - id: LID-CON-003
+    name: Ethernet Link Status
+    group: Connectivity
+    automation: AUTO
+  - id: LID-CON-004
+    name: Livox SDK2 Device Discovery
+    group: Connectivity
+    automation: AUTO
+  - id: LID-CON-005
+    name: Model / Serial / LiDAR IP Identification
+    group: Connectivity
+    automation: AUTO

@@ -35,10 +35,8 @@ class SSHManager:
             "port": self.config.port,
             "username": self.config.username,
         }
-
         if self.config.password:
             kwargs["password"] = self.config.password
-
         self._connection = await asyncssh.connect(**kwargs)
 
     async def disconnect(self) -> None:
@@ -51,6 +49,7 @@ class SSHManager:
         self,
         command: str,
         timeout: float = 10.0,
+        input_data: str | None = None,
     ) -> CommandResult:
         if self._connection is None:
             raise RuntimeError("SSH connection is not established")
@@ -59,6 +58,7 @@ class SSHManager:
             command,
             check=False,
             timeout=timeout,
+            input=input_data,
         )
 
         return CommandResult(
@@ -66,6 +66,25 @@ class SSHManager:
             stdout=result.stdout,
             stderr=result.stderr,
             exit_status=result.exit_status,
+        )
+
+    async def run_sudo(
+        self,
+        command: str,
+        sudo_password: str | None = None,
+        timeout: float = 10.0,
+    ) -> CommandResult:
+        if sudo_password:
+            sudo_command = f"sudo -S -p '' -- {command}"
+            input_data = sudo_password + "\n"
+        else:
+            sudo_command = f"sudo -n -- {command}"
+            input_data = None
+
+        return await self.run(
+            sudo_command,
+            timeout=timeout,
+            input_data=input_data,
         )
 
     async def probe_jetson(self) -> dict:
