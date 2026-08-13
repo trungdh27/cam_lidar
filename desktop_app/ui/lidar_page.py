@@ -25,21 +25,28 @@ from desktop_app.ui.dialogs import (
     DeviceOverviewDialog,
     NetworkProtocolDialog,
     NetworkSummaryDialog,
-    SSHConnectionDialog,
     TemporaryIPDialog,
 )
+from desktop_app.services.jetson_connection_service import (
+    JetsonConnectionService,
+)
+from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.widgets import Card, StatusChip
 from desktop_app.workers.livox_discovery_worker import LivoxDiscoveryWorker
-from desktop_app.workers.ssh_probe_worker import SSHProbeWorker
 from desktop_app.workers.temporary_ip_worker import TemporaryIPWorker
 
 
 class LidarPage(QWidget):
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        jetson_state: JetsonState,
+        jetson_service: JetsonConnectionService,
+        parent=None,
+    ):
         super().__init__(parent)
 
-        self.ssh_config = None
-        self.network_snapshot = None
+        self.jetson_state = jetson_state
+        self.jetson_service = jetson_service
         self.temporary_ip_state = None
         self.livox_device_info = None
 
@@ -47,7 +54,6 @@ class LidarPage(QWidget):
         self.network_summary_data = {}
         self.protocol_data = {}
 
-        self.ssh_worker = None
         self.temp_ip_worker = None
         self.livox_worker = None
         self._temporary_sudo_password = None
@@ -55,6 +61,10 @@ class LidarPage(QWidget):
         self._build_ui()
         self._load_test_cases()
         self._reset_runtime_ui()
+        self.jetson_state.state_changed.connect(
+            self._on_jetson_state_changed
+        )
+        self._on_jetson_state_changed(self.jetson_state)
 
     # ------------------------------------------------------------------
     # UI
@@ -79,14 +89,10 @@ class LidarPage(QWidget):
         header.addLayout(title_block)
         header.addStretch()
 
-        self.jetson_chip = StatusChip("Jetson Disconnected", "idle")
-        self.ssh_chip = StatusChip("SSH Offline", "idle")
         self.lidar_chip = StatusChip("Device Not Ready", "idle")
         self.stream_chip = StatusChip("Stream Idle", "idle")
 
         for chip in (
-            self.jetson_chip,
-            self.ssh_chip,
             self.lidar_chip,
             self.stream_chip,
         ):
@@ -178,9 +184,6 @@ class LidarPage(QWidget):
         self.discover_button = QPushButton("⌕  AUTO DISCOVER")
         self.discover_button.setObjectName("OutlineButton")
 
-        self.connect_button = QPushButton("↔  CONNECT")
-        self.connect_button.setObjectName("PrimaryButton")
-
         self.configure_ip_button = QPushButton("CONFIGURE IP")
         self.configure_ip_button.setObjectName("OutlineButton")
 
@@ -198,7 +201,6 @@ class LidarPage(QWidget):
 
         for button in (
             self.discover_button,
-            self.connect_button,
             self.configure_ip_button,
             self.restore_ip_button,
             self.start_stream_button,
@@ -208,7 +210,6 @@ class LidarPage(QWidget):
             action_buttons.addWidget(button)
 
         self.discover_button.clicked.connect(self.auto_discover)
-        self.connect_button.clicked.connect(self.connect_jetson)
         self.configure_ip_button.clicked.connect(self.configure_temporary_ip)
         self.restore_ip_button.clicked.connect(self.restore_temporary_ip)
         self.start_stream_button.clicked.connect(self.start_stream)
@@ -451,91 +452,43 @@ class LidarPage(QWidget):
         ).exec()
 
     # ------------------------------------------------------------------
-    # SSH
-    # ------------------------------------------------------------------
-
-    def connect_jetson(self):
-        dialog = SSHConnectionDialog(self.ssh_config, self)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        config = dialog.get_config()
-
-        if not config.host or not config.username:
-            QMessageBox.warning(
-                self,
-                "Jetson Connection",
-                "Jetson SSH IP and username are required.",
-            )
-            return
-
-        self.ssh_config = config
-
-        self.jetson_chip.set_state("warning", "Connecting Jetson")
-        self.ssh_chip.set_state("warning", "SSH Connecting")
-        self.connect_button.setEnabled(False)
-
-        self.append_log(
-            "INFO",
-            f"Connecting to Jetson {config.host}...",
-        )
-
-        self.ssh_worker = SSHProbeWorker(
-            host=config.host,
-            username=config.username,
-            password=config.password,
-            port=config.port,
-        )
-
-        self.ssh_worker.success.connect(self._on_ssh_success)
-        self.ssh_worker.failed.connect(self._on_ssh_failed)
-        self.ssh_worker.finished.connect(
-            lambda: self.connect_button.setEnabled(True)
-        )
-        self.ssh_worker.start()
-
-    def _on_ssh_success(self, result: dict):
-        self.network_snapshot = result["network"]
-        jetson = result["jetson"]
-
-        self.jetson_chip.set_state("ok", "Jetson Connected")
-        self.ssh_chip.set_state("ok", "SSH Online")
-
-        self.connect_button.setText("↔  RECONNECT")
-        self.configure_ip_button.setEnabled(True)
-
-        self.update_network_summary_data()
-
-        self.append_log(
-            "INFO",
-            f"SSH connected to Jetson {self.ssh_config.host} "
-            f"({jetson['hostname']}, {jetson['architecture']}).",
-        )
-
-    def _on_ssh_failed(self, error: str):
-        self.jetson_chip.set_state("error", "Jetson Error")
-        self.ssh_chip.set_state("error", "SSH Offline")
-
-        self.append_log("ERROR", error)
-
-        QMessageBox.critical(
-            self,
-            "SSH Connection Error",
-            error,
-        )
-
-    # ------------------------------------------------------------------
     # Network
     # ------------------------------------------------------------------
 
+    def _require_jetson_connection(self, action: str) -> bool:
+        if self.jetson_service.is_connected:
+            return True
+
+        message = (
+            f"Cannot {action}: Jetson is not connected. "
+            "Connect Jetson from Dashboard first."
+        )
+        self.append_log("WARNING", message)
+        QMessageBox.warning(self, "Jetson Connection Required", message)
+        return False
+
+    def _on_jetson_state_changed(self, _state):
+        connected = self.jetson_service.is_connected
+        self.discover_button.setEnabled(connected)
+        self.configure_ip_button.setEnabled(connected)
+        self.restore_ip_button.setEnabled(
+            connected
+            and bool(
+                self.temporary_ip_state
+                and self.temporary_ip_state.get("active")
+                and self.temporary_ip_state.get("added_by_app")
+            )
+        )
+        self.update_network_summary_data()
+
     def _valid_lidar_interfaces(self) -> list[str]:
-        if not self.network_snapshot:
+        network_snapshot = self.jetson_state.network_snapshot
+        if not network_snapshot:
             return []
 
         result = []
 
-        for interface in self.network_snapshot.get("interfaces", []):
+        for interface in network_snapshot.get("interfaces", []):
             if interface.get("protected"):
                 continue
             if interface.get("wireless"):
@@ -548,14 +501,12 @@ class LidarPage(QWidget):
         return result
 
     def configure_temporary_ip(self):
-        if not self.ssh_config or not self.network_snapshot:
-            QMessageBox.warning(
-                self,
-                "Network Configuration",
-                "Connect to Jetson first.",
-            )
+        if not self._require_jetson_connection(
+            "configure the LiDAR network"
+        ):
             return
 
+        network_snapshot = self.jetson_state.network_snapshot
         interfaces = self._valid_lidar_interfaces()
 
         if not interfaces:
@@ -568,7 +519,7 @@ class LidarPage(QWidget):
 
         dialog = TemporaryIPDialog(
             interfaces=interfaces,
-            candidate=self.network_snapshot.get("lidar_candidate"),
+            candidate=network_snapshot.get("lidar_candidate"),
             parent=self,
         )
 
@@ -595,7 +546,7 @@ class LidarPage(QWidget):
         )
 
         self.temp_ip_worker = TemporaryIPWorker(
-            ssh_config=self.ssh_config,
+            connection_service=self.jetson_service,
             action="apply",
             interface=values["interface"],
             ip_address=values["ip_address"],
@@ -610,13 +561,17 @@ class LidarPage(QWidget):
         self.temp_ip_worker.start()
 
     def restore_temporary_ip(self):
-        if not self.ssh_config or not self.temporary_ip_state:
+        if not self._require_jetson_connection(
+            "restore the LiDAR network"
+        ):
+            return
+        if not self.temporary_ip_state:
             return
 
         self.restore_ip_button.setEnabled(False)
 
         self.temp_ip_worker = TemporaryIPWorker(
-            ssh_config=self.ssh_config,
+            connection_service=self.jetson_service,
             action="restore",
             state=self.temporary_ip_state,
             sudo_password=self._temporary_sudo_password,
@@ -626,7 +581,7 @@ class LidarPage(QWidget):
         self.temp_ip_worker.start()
 
     def _on_temp_ip_success(self, result: dict):
-        self.network_snapshot = result["network"]
+        self.jetson_service.update_network_snapshot(result["network"])
         state = result["state"]
 
         if result["action"] == "apply":
@@ -668,12 +623,13 @@ class LidarPage(QWidget):
         ):
             return self.temporary_ip_state["cidr"].split("/", 1)[0]
 
-        if not self.network_snapshot:
+        network_snapshot = self.jetson_state.network_snapshot
+        if not network_snapshot:
             return None
 
-        candidate = self.network_snapshot.get("lidar_candidate")
+        candidate = network_snapshot.get("lidar_candidate")
 
-        for interface in self.network_snapshot.get("interfaces", []):
+        for interface in network_snapshot.get("interfaces", []):
             if interface.get("name") != candidate:
                 continue
 
@@ -684,12 +640,13 @@ class LidarPage(QWidget):
         return None
 
     def update_network_summary_data(self):
-        if not self.network_snapshot:
+        network_snapshot = self.jetson_state.network_snapshot
+        if not network_snapshot:
             self.network_summary_data = {}
             return
 
-        management = self.network_snapshot.get("management", {})
-        candidate = self.network_snapshot.get("lidar_candidate")
+        management = network_snapshot.get("management", {})
+        candidate = network_snapshot.get("lidar_candidate")
 
         lidar_ip = "-"
         if self.livox_device_info:
@@ -705,7 +662,7 @@ class LidarPage(QWidget):
             "ssh_ip": management.get("server_ip") or "-",
             "ssh_status": (
                 "ONLINE"
-                if self.ssh_config
+                if self.jetson_service.is_connected
                 else "OFFLINE"
             ),
             "lidar_interface": candidate or "-",
@@ -733,12 +690,7 @@ class LidarPage(QWidget):
     # ------------------------------------------------------------------
 
     def auto_discover(self):
-        if not self.ssh_config or not self.network_snapshot:
-            QMessageBox.warning(
-                self,
-                "Livox Discovery",
-                "Connect to Jetson first.",
-            )
+        if not self._require_jetson_connection("discover the LiDAR"):
             return
 
         host_ip = self._jetson_lidar_ip()
@@ -762,7 +714,7 @@ class LidarPage(QWidget):
         )
 
         self.livox_worker = LivoxDiscoveryWorker(
-            ssh_config=self.ssh_config,
+            connection_service=self.jetson_service,
             host_ip=host_ip,
             model=model,
             timeout=8,
@@ -1128,11 +1080,10 @@ class LidarPage(QWidget):
     # ------------------------------------------------------------------
 
     def _reset_runtime_ui(self):
-        self.jetson_chip.set_state("idle", "Jetson Disconnected")
-        self.ssh_chip.set_state("idle", "SSH Offline")
         self.lidar_chip.set_state("idle", "Device Not Ready")
         self.stream_chip.set_state("idle", "Stream Idle")
 
+        self.discover_button.setEnabled(False)
         self.configure_ip_button.setEnabled(False)
         self.restore_ip_button.setEnabled(False)
         self.start_stream_button.setEnabled(False)
