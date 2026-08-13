@@ -14,6 +14,7 @@ from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
 from desktop_app.state.jetson_state import JetsonState
+from desktop_app.ui.camera_page import CameraPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 
@@ -133,6 +134,12 @@ class MainWindow(QMainWindow):
                     self.refresh_dashboard
                 )
                 self.pages.addWidget(self.dashboard_page)
+            elif index == 2:
+                self.camera_page = CameraPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.camera_page)
             elif index == 3:
                 self.lidar_page = LidarPage(
                     self.jetson_state,
