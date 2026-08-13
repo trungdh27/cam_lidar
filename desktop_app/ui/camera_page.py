@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -20,7 +19,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from desktop_app.ui.dialogs import SSHConnectionDialog
+from desktop_app.services.jetson_connection_service import (
+    JetsonConnectionService,
+)
+from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.widgets import Card, StatusChip
 from desktop_app.workers.camera_connection_worker import CameraConnectionWorker
 from desktop_app.workers.camera_discovery_worker import CameraDiscoveryWorker
@@ -46,17 +48,35 @@ class CameraPage(QWidget):
         ("CAM-IMG-001", "Basic Image Availability", "Image Quality", "20 s"),
     )
 
-    def __init__(self, parent=None, camera_service=None):
+    def __init__(
+        self,
+        jetson_state: JetsonState,
+        jetson_service: JetsonConnectionService,
+        parent=None,
+        camera_service=None,
+    ):
         super().__init__(parent)
+        self.jetson_state = jetson_state
+        self.jetson_service = jetson_service
         self.camera_service = camera_service or CameraService()
         self.connection_state = CameraConnectionState.DISCONNECTED
         self.camera_worker = None
-        self.ssh_config = None
+        self.remote_request_id = None
+        self.remote_action = None
+        self._last_jetson_connected = None
 
         self._build_ui()
         self._load_profiles()
         self._load_test_cases()
         self._reset_runtime_ui()
+        self.jetson_state.state_changed.connect(self._on_jetson_state_changed)
+        self.jetson_service.operation_succeeded.connect(
+            self._on_remote_operation_succeeded
+        )
+        self.jetson_service.operation_failed.connect(
+            self._on_remote_operation_failed
+        )
+        self._on_jetson_state_changed(self.jetson_state)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -156,9 +176,8 @@ class CameraPage(QWidget):
         )
         self.jetson_target_label = QLabel("Not configured")
         self.jetson_target_label.setObjectName("Muted")
-        self.configure_jetson_button = QPushButton("Configure Jetson")
-        self.configure_jetson_button.setObjectName("SmallButton")
-        self.configure_jetson_button.clicked.connect(self._configure_jetson)
+        self.jetson_status_label = QLabel("Not connected")
+        self.jetson_status_label.setObjectName("Muted")
         self.device_combo = QComboBox()
         self.resolution_combo = QComboBox()
         self.fps_combo = QComboBox()
@@ -177,9 +196,12 @@ class CameraPage(QWidget):
         jetson_row = QHBoxLayout()
         jetson_row.addWidget(self.jetson_target_label)
         jetson_row.addStretch()
-        jetson_row.addWidget(self.configure_jetson_button)
-        grid.addWidget(QLabel("Jetson Target:"), len(fields), 0)
+        self.jetson_target_title = QLabel("Jetson Target:")
+        grid.addWidget(self.jetson_target_title, len(fields), 0)
         grid.addLayout(jetson_row, len(fields), 1)
+        self.jetson_status_title = QLabel("Status:")
+        grid.addWidget(self.jetson_status_title, len(fields) + 1, 0)
+        grid.addWidget(self.jetson_status_label, len(fields) + 1, 1)
         grid.setColumnStretch(1, 1)
         card.body_layout.addLayout(grid)
 
@@ -335,32 +357,50 @@ class CameraPage(QWidget):
 
     def _on_execution_host_changed(self, execution_host):
         is_jetson = execution_host == "Jetson"
+        self.jetson_target_title.setVisible(is_jetson)
         self.jetson_target_label.setVisible(is_jetson)
-        self.configure_jetson_button.setVisible(is_jetson)
+        self.jetson_status_title.setVisible(is_jetson)
+        self.jetson_status_label.setVisible(is_jetson)
         if is_jetson:
-            if self.ssh_config:
-                self.jetson_target_label.setText(
-                    f"{self.ssh_config.username}@{self.ssh_config.host}:{self.ssh_config.port}"
+            self._render_jetson_state()
+            if not self.jetson_service.is_connected:
+                self.append_log(
+                    "WARNING", "Connect Jetson from Dashboard first."
                 )
-            else:
-                self.jetson_target_label.setText("Not configured")
 
-    def _configure_jetson(self):
-        dialog = SSHConnectionDialog(self.ssh_config, self)
-        dialog.setWindowTitle("Camera Jetson Connection")
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return False
-        config = dialog.get_config()
-        if not config.host or not config.username:
-            self.append_log("ERROR", "Jetson host and username are required.")
-            return False
-        self.ssh_config = config
-        self._on_execution_host_changed("Jetson")
+    def _on_jetson_state_changed(self, _state):
+        was_connected = self._last_jetson_connected
+        self._render_jetson_state()
+        is_connected = self.jetson_service.is_connected
+        self._last_jetson_connected = is_connected
+        if (
+            was_connected is True
+            and not is_connected
+            and self.execution_host_combo.currentText() == "Jetson"
+        ):
+            self.append_log(
+                "WARNING", "Connect Jetson from Dashboard first."
+            )
+
+    def _render_jetson_state(self):
+        if self.jetson_service.is_connected:
+            self.jetson_target_label.setText(
+                f"{self.jetson_state.username}@{self.jetson_state.host}:"
+                f"{self.jetson_state.port}"
+            )
+            self.jetson_status_label.setText("Connected via Dashboard")
+        else:
+            self.jetson_target_label.setText("Not connected")
+            self.jetson_status_label.setText("Not connected")
+
+    def _require_jetson_connection(self, action: str) -> bool:
+        if self.jetson_service.is_connected:
+            return True
         self.append_log(
-            "INFO",
-            f"Jetson target configured: {config.username}@{config.host}:{config.port}.",
+            "WARNING", f"Cannot {action}: Jetson is not connected."
         )
-        return True
+        self.append_log("WARNING", "Connect Jetson from Dashboard first.")
+        return False
 
     def _update_stream_options(self, *_):
         profile_id = self.model_combo.currentData()
@@ -398,21 +438,19 @@ class CameraPage(QWidget):
             "resolution": self.resolution_combo.currentText(),
             "fps": int(self.fps_combo.currentText() or 0),
             "pixel_format": self.format_combo.currentText(),
-            "ssh_config": self.ssh_config,
         }
 
     def _request_action(self, action):
-        if self.camera_worker and self.camera_worker.isRunning():
+        if (
+            (self.camera_worker and self.camera_worker.isRunning())
+            or self.remote_request_id is not None
+        ):
             self.append_log("WARNING", "A camera operation is already running.")
             return
 
-        if (
-            action in ("discover", "connect")
-            and self.execution_host_combo.currentText() == "Jetson"
-            and not self.ssh_config
-            and not self._configure_jetson()
-        ):
-            self.append_log("WARNING", "Jetson camera operation cancelled: SSH is not configured.")
+        remote = self.execution_host_combo.currentText() == "Jetson"
+        action_text = action.replace("_", " ")
+        if remote and not self._require_jetson_connection(action_text):
             return
 
         payload = self._action_payload()
@@ -434,12 +472,24 @@ class CameraPage(QWidget):
             )
 
         self.append_log("INFO", f"{action.replace('_', ' ').title()} requested.")
-        if payload["execution_host"] == "Jetson" and self.ssh_config:
+        if remote:
             self.append_log(
                 "INFO",
-                f"Executing on Jetson {self.ssh_config.host} through SSH.",
+                f"Executing on shared Jetson connection {self.jetson_state.host}.",
             )
         self._set_actions_enabled(False)
+        if remote:
+            self.remote_action = action
+            self.remote_request_id = self.jetson_service.submit_operation(
+                f"camera_{action}",
+                lambda ssh: self.camera_service.execute_with_ssh(
+                    ssh, action, payload
+                ),
+            )
+            if self.remote_request_id is None:
+                self.remote_action = None
+                self._set_actions_enabled(True)
+            return
         if action == "discover":
             self.camera_worker = CameraDiscoveryWorker(self.camera_service, payload, self)
             self.camera_worker.succeeded.connect(self._on_discovery_succeeded)
@@ -458,6 +508,27 @@ class CameraPage(QWidget):
             self.camera_worker.failed.connect(self._on_action_failed)
         self.camera_worker.finished.connect(lambda: self._set_actions_enabled(True))
         self.camera_worker.start()
+
+    def _on_remote_operation_succeeded(self, request_id, result):
+        if request_id != self.remote_request_id:
+            return
+        action = self.remote_action
+        self.remote_request_id = None
+        self.remote_action = None
+        self._set_actions_enabled(True)
+        if action == "discover":
+            self._on_discovery_succeeded(result)
+        else:
+            self._on_action_succeeded(action, result or {})
+
+    def _on_remote_operation_failed(self, request_id, error):
+        if request_id != self.remote_request_id:
+            return
+        action = self.remote_action
+        self.remote_request_id = None
+        self.remote_action = None
+        self._set_actions_enabled(True)
+        self._on_action_failed(action, error)
 
     def _on_discovery_succeeded(self, result):
         devices = result.get("devices", [])

@@ -30,10 +30,12 @@ class CameraService:
         )
 
     def execute(self, action: str, payload: dict) -> dict:
+        if payload.get("execution_host") == "Jetson":
+            raise CameraBackendUnavailable(
+                "Jetson camera operations require the shared Jetson connection."
+            )
         profile = self.profile(payload["profile_id"])
-        remote = payload.get("execution_host") == "Jetson"
-        registry = self._remote_backends if remote else self._backends
-        backend = registry.get(profile.backend)
+        backend = self._backends.get(profile.backend)
 
         if backend is None:
             raise CameraBackendUnavailable(
@@ -46,3 +48,15 @@ class CameraService:
                 f"Camera backend '{profile.backend}' does not support '{action}'."
             )
         return handler(payload)
+
+    async def execute_with_ssh(self, ssh, action: str, payload: dict) -> dict:
+        profile = self.profile(payload["profile_id"])
+        backend = self._remote_backends.get(profile.backend)
+
+        if backend is None:
+            raise CameraBackendUnavailable(
+                f"{profile.sdk_driver} remote communication is not implemented "
+                "for this camera family."
+            )
+
+        return await backend.execute_with_ssh(ssh, action, payload)

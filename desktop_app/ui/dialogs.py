@@ -14,63 +14,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from core.remote.ssh_manager import SSHConfig
-
-
-class SSHConnectionDialog(QDialog):
-    def __init__(self, current: SSHConfig | None = None, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Jetson Connection")
-        self.setMinimumWidth(420)
-
-        root = QVBoxLayout(self)
-        form = QFormLayout()
-
-        self.host_input = QLineEdit()
-        self.host_input.setPlaceholderText("192.168.9.169")
-
-        self.user_input = QLineEdit()
-        self.user_input.setText("huu")
-
-        self.port_input = QSpinBox()
-        self.port_input.setRange(1, 65535)
-        self.port_input.setValue(22)
-
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setPlaceholderText("Leave empty when using an SSH key")
-
-        if current:
-            self.host_input.setText(current.host)
-            self.user_input.setText(current.username)
-            self.port_input.setValue(current.port)
-            if current.password:
-                self.password_input.setText(current.password)
-
-        form.addRow("Jetson SSH IP:", self.host_input)
-        form.addRow("Username:", self.user_input)
-        form.addRow("Port:", self.port_input)
-        form.addRow("Password:", self.password_input)
-        root.addLayout(form)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Connect")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
-    def get_config(self) -> SSHConfig:
-        return SSHConfig(
-            host=self.host_input.text().strip(),
-            username=self.user_input.text().strip(),
-            port=self.port_input.value(),
-            password=self.password_input.text() or None,
-        )
-
-
 class TemporaryIPDialog(QDialog):
     def __init__(
         self,

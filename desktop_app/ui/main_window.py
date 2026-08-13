@@ -10,7 +10,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop_app.services.jetson_connection_service import (
+    JetsonConnectionService,
+)
+from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.camera_page import CameraPage
+from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 
 
@@ -53,6 +58,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Hardware Test Automation")
         self.resize(1500, 920)
         self.setMinimumSize(1180, 720)
+        self.jetson_state = JetsonState(self)
+        self.jetson_service = JetsonConnectionService(
+            self.jetson_state,
+            self,
+        )
         self._build_ui()
 
     def _build_ui(self):
@@ -112,20 +122,56 @@ class MainWindow(QMainWindow):
         }
 
         for index in range(len(self.NAV_ITEMS)):
-            if index == 2:
-                self.pages.addWidget(CameraPage())
+            if index == 0:
+                self.dashboard_page = DashboardPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.dashboard_page.navigate_requested.connect(
+                    self.navigate_to
+                )
+                self.dashboard_page.refresh_requested.connect(
+                    self.refresh_dashboard
+                )
+                self.pages.addWidget(self.dashboard_page)
+            elif index == 2:
+                self.camera_page = CameraPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.camera_page)
             elif index == 3:
-                self.pages.addWidget(LidarPage())
+                self.lidar_page = LidarPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.lidar_page)
             else:
                 title, subtitle = placeholders[index]
                 self.pages.addWidget(PlaceholderPage(title, subtitle))
 
-        self.nav_group.idClicked.connect(self.pages.setCurrentIndex)
+        self.nav_group.idClicked.connect(self.navigate_to)
 
-        self.nav_buttons[3].setChecked(True)
-        self.pages.setCurrentIndex(3)
+        self.nav_buttons[0].setChecked(True)
+        self.pages.setCurrentIndex(0)
 
         layout.addWidget(sidebar)
         layout.addWidget(self.pages, 1)
 
         self.setCentralWidget(root)
+
+    def navigate_to(self, index: int):
+        if not 0 <= index < self.pages.count():
+            return
+
+        self.pages.setCurrentIndex(index)
+        self.nav_buttons[index].setChecked(True)
+
+    def refresh_dashboard(self):
+        # Giai đoạn đầu chỉ xác nhận thao tác.
+        # Sau này lấy dữ liệu từ AppState hoặc DashboardController.
+        self.dashboard_page.updated_label.setText("Updated just now")
+
+    def closeEvent(self, event):
+        self.jetson_service.shutdown()
+        super().closeEvent(event)

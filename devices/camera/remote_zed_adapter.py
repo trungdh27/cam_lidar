@@ -5,7 +5,6 @@ from threading import RLock
 
 import asyncssh
 
-from core.remote.ssh_manager import SSHConfig, SSHManager
 from devices.camera.base_adapter import (
     BaseCameraAdapter,
     CameraAlreadyInUseError,
@@ -35,7 +34,26 @@ class RemoteZedAdapter(BaseCameraAdapter):
             return self._connected_device is not None
 
     def discover(self, payload: dict) -> dict:
-        result = self._execute_remote("discover", payload)
+        raise CameraOpenError(
+            "Remote ZED discovery requires the shared Jetson connection."
+        )
+
+    def connect(self, payload: dict) -> dict:
+        raise CameraOpenError(
+            "Remote ZED connection requires the shared Jetson connection."
+        )
+
+    async def execute_with_ssh(self, ssh, action: str, payload: dict) -> dict:
+        if action == "disconnect":
+            return self.disconnect(payload)
+        if action == "connect":
+            return await self._connect_with_ssh(ssh, payload)
+        if action == "discover":
+            return await self._discover_with_ssh(ssh, payload)
+        raise CameraOpenError(f"Remote ZED operation '{action}' is not supported.")
+
+    async def _discover_with_ssh(self, ssh, payload: dict) -> dict:
+        result = await self._execute_remote(ssh, "discover", payload)
         profile = get_camera_profile(payload["profile_id"])
         devices = result.get("devices", [])
         matching = [item for item in devices if self._matches_profile(item, profile.profile_id)]
@@ -44,10 +62,10 @@ class RemoteZedAdapter(BaseCameraAdapter):
         if not devices:
             raise CameraNotDetectedError(f"No {profile.display_name} camera was detected on Jetson.")
         result["devices"] = devices
-        result["execution_host"] = self._target_text(payload)
+        result["execution_host"] = self._target_text(ssh)
         return result
 
-    def connect(self, payload: dict) -> dict:
+    async def _connect_with_ssh(self, ssh, payload: dict) -> dict:
         with self._lock:
             if self._connected_device is not None:
                 serial = self._connected_device.get("serial_number", "-")
@@ -57,10 +75,10 @@ class RemoteZedAdapter(BaseCameraAdapter):
         if not payload.get("device_id"):
             raise CameraNotDetectedError("Select a discovered Jetson ZED camera before connecting.")
         self._validate_configuration(payload)
-        result = self._execute_remote("connect", payload)
+        result = await self._execute_remote(ssh, "connect", payload)
         with self._lock:
             self._connected_device = result["device"]
-        result["execution_host"] = self._target_text(payload)
+        result["execution_host"] = self._target_text(ssh)
         result["access_validated"] = True
         return result
 
@@ -69,8 +87,7 @@ class RemoteZedAdapter(BaseCameraAdapter):
             self._connected_device = None
         return {"disconnected": True, "remote_validation_session": True}
 
-    def _execute_remote(self, action: str, payload: dict) -> dict:
-        config = self._ssh_config(payload)
+    async def _execute_remote(self, ssh, action: str, payload: dict) -> dict:
         request = {
             "action": action,
             "profile_id": payload["profile_id"],
@@ -81,32 +98,28 @@ class RemoteZedAdapter(BaseCameraAdapter):
             "open_timeout": min(self.command_timeout, 10.0),
         }
         try:
-            return asyncio.run(self._run(config, request))
+            command = "python3 -c " + shlex.quote(JETSON_ZED_PROBE) + " " + shlex.quote(
+                json.dumps(request, separators=(",", ":"))
+            )
+            result = await ssh.run(command, timeout=self.command_timeout)
+            response = self._parse_payload(result.stdout)
+            if not response.get("ok"):
+                self._raise_remote_error(response)
+            return response
         except (asyncio.TimeoutError, TimeoutError) as exc:
             raise CameraOperationTimeout(
                 f"Jetson ZED {action} command timed out after {self.command_timeout:.0f} seconds."
             ) from exc
         except asyncssh.PermissionDenied as exc:
+            config = ssh.config
             raise CameraOpenError(
-                f"Jetson SSH authentication failed for {config.username}@{config.host}."
+                f"Jetson SSH authentication failed for "
+                f"{config.username}@{config.host}."
             ) from exc
         except (asyncssh.Error, OSError) as exc:
-            raise CameraOpenError(f"Jetson {config.host} is unreachable over SSH: {exc}") from exc
-
-    async def _run(self, config: SSHConfig, request: dict) -> dict:
-        ssh = SSHManager(config)
-        try:
-            await asyncio.wait_for(ssh.connect(), timeout=self.command_timeout)
-            command = "python3 -c " + shlex.quote(JETSON_ZED_PROBE) + " " + shlex.quote(
-                json.dumps(request, separators=(",", ":"))
-            )
-            result = await ssh.run(command, timeout=self.command_timeout)
-            payload = self._parse_payload(result.stdout)
-            if not payload.get("ok"):
-                self._raise_remote_error(payload)
-            return payload
-        finally:
-            await ssh.disconnect()
+            raise CameraOpenError(
+                f"Jetson {ssh.config.host} remote operation failed: {exc}"
+            ) from exc
 
     @classmethod
     def _parse_payload(cls, output: str) -> dict:
@@ -133,15 +146,8 @@ class RemoteZedAdapter(BaseCameraAdapter):
         raise CameraOpenError(message)
 
     @staticmethod
-    def _ssh_config(payload):
-        config = payload.get("ssh_config")
-        if not isinstance(config, SSHConfig) or not config.host or not config.username:
-            raise CameraOpenError("Jetson SSH configuration is required.")
-        return config
-
-    @staticmethod
-    def _target_text(payload):
-        config = payload["ssh_config"]
+    def _target_text(ssh):
+        config = ssh.config
         return f"{config.username}@{config.host}:{config.port}"
 
     @staticmethod
