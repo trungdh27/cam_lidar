@@ -22,8 +22,15 @@ PY
 echo "[3/4] UI imports..."
 python - <<'PY'
 from desktop_app.ui.lidar_page import LidarPage
+from desktop_app.ui.camera_page import CameraPage
 from desktop_app.ui.main_window import MainWindow
+from desktop_app.workers.camera_worker import CameraActionWorker
+from desktop_app.workers.camera_discovery_worker import CameraDiscoveryWorker
+from desktop_app.workers.camera_connection_worker import CameraConnectionWorker
 from desktop_app.workers.livox_discovery_worker import LivoxDiscoveryWorker
+from devices.camera.service import CameraService
+from devices.camera.zed_adapter import ZedAdapter
+from devices.camera.remote_zed_adapter import RemoteZedAdapter
 print("UI imports OK")
 PY
 

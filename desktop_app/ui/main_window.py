@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from desktop_app.ui.camera_page import CameraPage
 from desktop_app.ui.lidar_page import LidarPage
 
 
@@ -111,7 +112,9 @@ class MainWindow(QMainWindow):
         }
 
         for index in range(len(self.NAV_ITEMS)):
-            if index == 3:
+            if index == 2:
+                self.pages.addWidget(CameraPage())
+            elif index == 3:
                 self.pages.addWidget(LidarPage())
             else:
                 title, subtitle = placeholders[index]
