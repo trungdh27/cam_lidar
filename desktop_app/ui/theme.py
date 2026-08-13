@@ -134,6 +134,12 @@ QPushButton#OutlineButton:hover {
     background: #EFF4FF;
 }
 
+QPushButton#OutlineButton:disabled {
+    background: #F2F4F7;
+    border-color: #D0D5DD;
+    color: #98A2B3;
+}
+
 QPushButton#DangerButton {
     background: #FFFFFF;
     border: 1px solid #F97066;
@@ -191,4 +197,46 @@ QTextEdit#LiveLog {
 QDialog {
     background: #F8FAFC;
 }
+
+QFrame#MetricCard {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 9px;
+}
+
+QLabel#MetricLabel {
+    color: #667085;
+    font-weight: 600;
+}
+
+QLabel#MetricValue {
+    color: #182230;
+    font-size: 26px;
+    font-weight: 800;
+}
+
+QLabel#MetricNote {
+    color: #667085;
+    font-size: 11px;
+}
+
+QLabel#ReadinessValue {
+    color: #155EEF;
+    font-size: 26px;
+    font-weight: 800;
+}
+
+QProgressBar {
+    background: #EAECF0;
+    border: 0;
+    border-radius: 5px;
+    min-height: 10px;
+    max-height: 10px;
+}
+
+QProgressBar::chunk {
+    background: #155EEF;
+    border-radius: 5px;
+}
+
 """
