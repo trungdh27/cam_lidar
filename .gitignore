@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+.env
+.idea/
+.vscode/
+data/*.db
+data/active_network_session.json
+evidence/*
+!evidence/.gitkeep
+jetson_tools/**/build/
+
+# Local UI backup / extracted packages
+backup_ui_before_v2/
+cam_lidar_ui_v2/
