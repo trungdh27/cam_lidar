@@ -1,0 +1,68 @@
+[
+  {
+    "id": "CS-007", "name": "CameraOne Open and Basic Grab", "group": "Camera Smoke",
+    "automation_key": "camera.basic_grab", "priority": "P0", "timeout_s": 45,
+    "parameters": {"resolution_key": "HD1080", "width": 1920, "height": 1080, "fps_values": [30], "min_frames": 100},
+    "rules": [
+      {"metric": "open_success", "operator": "==", "expected": true},
+      {"metric": "successful_frame_count", "operator": ">=", "expected": 100},
+      {"metric": "invalid_frame_count", "operator": "==", "expected": 0},
+      {"metric": "width", "operator": ">", "expected": 0},
+      {"metric": "height", "operator": ">", "expected": 0},
+      {"metric": "close_success", "operator": "==", "expected": true},
+      {"metric": "daemon_hang_count", "operator": "==", "expected": 0}
+    ]
+  },
+  {
+    "id": "CS-008", "name": "Basic 4K Mode Setup Smoke Test", "group": "Camera Smoke",
+    "automation_key": "camera.smoke_4k", "priority": "P0", "timeout_s": 45,
+    "parameters": {"resolution_key": "HD4K", "width": 3840, "height": 2160, "fps_values": [15], "min_frames": 100},
+    "rules": [
+      {"metric": "successful_frame_count", "operator": ">=", "expected": 100},
+      {"metric": "width", "operator": "==", "expected": 3840},
+      {"metric": "height", "operator": "==", "expected": 2160},
+      {"metric": "invalid_frame_count", "operator": "==", "expected": 0},
+      {"metric": "corrupted_frame_count", "operator": "==", "expected": 0},
+      {"metric": "continuous_grab_failure", "operator": "==", "expected": false},
+      {"metric": "daemon_active", "operator": "==", "expected": true}
+    ]
+  },
+  {
+    "id": "RF-001", "name": "HD4K Output Resolution Verification", "group": "Resolution & FPS",
+    "automation_key": "camera.resolution_fps", "priority": "P0", "timeout_s": 60,
+    "parameters": {"resolution_key": "HD4K", "width": 3840, "height": 2160, "fps_values": [15], "min_frames": 300, "max_drop_ratio": 0.001},
+    "rules": [
+      {"metric": "all_subcases_pass", "operator": "==", "expected": true}
+    ]
+  },
+  {
+    "id": "RF-002", "name": "HD1080 Resolution/FPS Matrix", "group": "Resolution & FPS",
+    "automation_key": "camera.resolution_fps", "priority": "P0", "timeout_s": 90,
+    "parameters": {"resolution_key": "HD1080", "width": 1920, "height": 1080, "fps_values": [15, 30, 60], "min_frames": 100},
+    "rules": [{"metric": "all_subcases_pass", "operator": "==", "expected": true}]
+  },
+  {
+    "id": "RF-003", "name": "QHDPLUS Resolution/FPS Matrix", "group": "Resolution & FPS",
+    "automation_key": "camera.resolution_fps", "priority": "P0", "timeout_s": 90,
+    "parameters": {"resolution_key": "QHDPLUS", "width": 3200, "height": 1800, "fps_values": [15, 30, 60], "min_frames": 100, "require_timestamp_integrity": true},
+    "rules": [{"metric": "all_subcases_pass", "operator": "==", "expected": true}]
+  },
+  {
+    "id": "RF-004", "name": "HD1200 Resolution/FPS Matrix", "group": "Resolution & FPS",
+    "automation_key": "camera.resolution_fps", "priority": "P0", "timeout_s": 90,
+    "parameters": {"resolution_key": "HD1200", "width": 1920, "height": 1200, "fps_values": [15, 30, 60], "min_frames": 100, "require_timestamp_integrity": true, "require_no_disconnect": true},
+    "rules": [{"metric": "all_subcases_pass", "operator": "==", "expected": true}]
+  },
+  {
+    "id": "SR-004", "name": "Invalid Serial, Resolution and FPS Handling", "group": "Stability & Recovery",
+    "automation_key": "camera.invalid_config", "priority": "P0", "timeout_s": 120,
+    "parameters": {"recovery_frames": 5},
+    "rules": [
+      {"metric": "all_invalid_inputs_rejected", "operator": "==", "expected": true},
+      {"metric": "app_crash_count", "operator": "==", "expected": 0},
+      {"metric": "wrong_camera_open_count", "operator": "==", "expected": 0},
+      {"metric": "residual_busy_count", "operator": "==", "expected": 0},
+      {"metric": "valid_recovery_after_every_negative_case", "operator": "==", "expected": true}
+    ]
+  }
+]

@@ -29,6 +29,13 @@ class SSHManager:
     def connected(self) -> bool:
         return self._connection is not None
 
+    @property
+    def local_address(self) -> str | None:
+        if self._connection is None:
+            return None
+        address = self._connection.get_extra_info("sockname")
+        return address[0] if address else None
+
     async def connect(self) -> None:
         kwargs = {
             "host": self.config.host,
