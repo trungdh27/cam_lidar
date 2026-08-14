@@ -2,16 +2,21 @@ import html
 from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -22,13 +27,57 @@ from PySide6.QtWidgets import (
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
+from desktop_app.controllers.camera_stream_controller import CameraStreamController
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.widgets import Card, StatusChip
 from desktop_app.workers.camera_connection_worker import CameraConnectionWorker
 from desktop_app.workers.camera_discovery_worker import CameraDiscoveryWorker
 from desktop_app.workers.camera_worker import CameraActionWorker
+from desktop_app.workers.camera_preview_receiver import CameraPreviewReceiver
+from desktop_app.workers.gstreamer_preview_receiver import (
+    GStreamerPreviewReceiver,
+    inspect_host_gstreamer,
+)
 from devices.camera.models import CameraConnectionState
 from devices.camera.service import CameraService
+from devices.camera.preview_config import (
+    H264_PREVIEW_PORT, PREVIEW_HEIGHT, PREVIEW_MODE, PREVIEW_PORT, PREVIEW_WIDTH,
+)
+from core.testing.definitions import load_definitions
+from core.testing.registry import TestRegistry
+from devices.camera.testing import register_camera_handlers
+from desktop_app.workers.camera_test_runner_worker import CameraTestRunnerWorker
+
+
+class CameraPreviewLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__("Preview unavailable", parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(220)
+        self.setStyleSheet("background:#090E17; border:1px solid #30363D; color:#8B949E;")
+        self._source = None
+
+    def show_image(self, image):
+        self._source = image
+        self._render()
+
+    def show_message(self, message):
+        self._source = None
+        self.clear()
+        self.setText(message)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render()
+
+    def _render(self):
+        if self._source is None:
+            return
+        pixmap = QPixmap.fromImage(self._source)
+        self.setPixmap(pixmap.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
 
 
 class CameraPage(QWidget):
@@ -38,15 +87,7 @@ class CameraPage(QWidget):
     stream_start_requested = Signal(dict)
     stream_stop_requested = Signal(dict)
     tests_requested = Signal(list)
-
-    TEST_CASES = (
-        ("CAM-CON-001", "Device Discovery", "Connectivity", "10 s"),
-        ("CAM-CON-002", "Open Camera Device", "Connectivity", "10 s"),
-        ("CAM-STR-001", "Start and Stop Stream", "Streaming", "20 s"),
-        ("CAM-STR-002", "Validate Resolution and FPS", "Streaming", "30 s"),
-        ("CAM-STR-003", "Frame Continuity / Drop Check", "Reliability", "60 s"),
-        ("CAM-IMG-001", "Basic Image Availability", "Image Quality", "20 s"),
-    )
+    shutdown_ready = Signal()
 
     def __init__(
         self,
@@ -64,6 +105,40 @@ class CameraPage(QWidget):
         self.remote_request_id = None
         self.remote_action = None
         self._last_jetson_connected = None
+        self._disconnect_after_stop = False
+        self._shutdown_pending = False
+        self._previous_frame_count = None
+        self._unchanged_frame_polls = 0
+        self._stall_warning_active = False
+        self._low_fps_samples = 0
+        self._low_fps_warning_active = False
+        self._stable_fps_samples = 0
+        self._stable_fps_logged = False
+        self.preview_receiver = None
+        self.preview_state = "OFF"
+        self.preview_frames_received = 0
+        self.preview_frames_displayed = 0
+        self.preview_frames_dropped = 0
+        self._preview_first_frame = False
+        self.host_gstreamer = inspect_host_gstreamer()
+        self.preview_backend = None
+        self._preview_fallback_used = False
+        self.test_registry = TestRegistry()
+        register_camera_handlers(self.test_registry)
+        self.test_definitions = []
+        self.test_statuses = {}
+        self.test_results = {}
+        self.test_runner_worker = None
+        self._test_definition_error = None
+        try:
+            self.test_definitions = load_definitions(
+                "testcases/camera/definitions/phase8_1a.json", self.test_registry
+            )
+        except Exception as exc:
+            self._test_definition_error = str(exc)
+        self.stream_controller = CameraStreamController(
+            self.jetson_service, self.camera_service, self
+        )
 
         self._build_ui()
         self._load_profiles()
@@ -76,6 +151,11 @@ class CameraPage(QWidget):
         self.jetson_service.operation_failed.connect(
             self._on_remote_operation_failed
         )
+        self.stream_controller.started.connect(self._on_stream_started)
+        self.stream_controller.stopped.connect(self._on_stream_stopped)
+        self.stream_controller.metrics_received.connect(self._update_monitor)
+        self.stream_controller.failed.connect(self._on_stream_failed)
+        self.stream_controller.preview_fallback_ready.connect(self._start_jpeg_fallback)
         self._on_jetson_state_changed(self.jetson_state)
 
     def _build_ui(self):
@@ -102,20 +182,89 @@ class CameraPage(QWidget):
         header.addWidget(self.stream_chip)
         root.addLayout(header)
 
+        subnav = QHBoxLayout()
+        self.monitor_tab_button = QPushButton("MONITOR")
+        self.tests_tab_button = QPushButton("AUTOMATED TESTS")
+        for button in (self.monitor_tab_button, self.tests_tab_button):
+            button.setObjectName("OutlineButton")
+            button.setCheckable(True)
+            button.setMinimumWidth(145)
+            subnav.addWidget(button)
+        subnav.addStretch()
+        root.addLayout(subnav)
+
+        self.camera_pages = QStackedWidget()
+        self.monitor_page = self._build_monitor_page()
+        self.automated_tests_page = self._build_automated_tests_page()
+        self.camera_pages.addWidget(self.monitor_page)
+        self.camera_pages.addWidget(self.automated_tests_page)
+        root.addWidget(self.camera_pages, 1)
+        self.monitor_tab_button.clicked.connect(lambda: self._set_camera_subpage(0))
+        self.tests_tab_button.clicked.connect(lambda: self._set_camera_subpage(1))
+        self._set_camera_subpage(0)
+
+    def _build_monitor_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
         top_row.addWidget(self._build_device_card(), 1)
         top_row.addWidget(self._build_overview_card(), 1)
-        root.addLayout(top_row)
+        layout.addLayout(top_row)
 
         middle_row = QHBoxLayout()
         middle_row.setSpacing(10)
         middle_row.addWidget(self._build_stream_card(), 1)
         middle_row.addWidget(self._build_monitor_card(), 1)
-        root.addLayout(middle_row)
+        middle_row.addWidget(self._build_preview_card(), 2)
+        layout.addLayout(middle_row)
+        layout.addWidget(self._build_automation_summary_card())
+        layout.addWidget(self._build_log_card(), 1)
+        return page
 
-        root.addWidget(self._build_test_card())
-        root.addWidget(self._build_log_card(), 1)
+    def _build_automated_tests_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(self._build_runner_status_card())
+        test_card = self._build_test_card()
+        layout.addWidget(self._build_test_filter_card())
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(test_card)
+        splitter.addWidget(self._build_test_detail_card())
+        splitter.setStretchFactor(0, 7)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([900, 400])
+        layout.addWidget(splitter, 5)
+        layout.addWidget(self._build_test_control_card())
+        layout.addWidget(self._build_test_log_card(), 2)
+        return page
+
+    def _set_camera_subpage(self, index):
+        self.camera_pages.setCurrentIndex(index)
+        self.monitor_tab_button.setChecked(index == 0)
+        self.tests_tab_button.setChecked(index == 1)
+        self._refresh_runner_status()
+
+    def _build_automation_summary_card(self):
+        card = Card("Automated Tests")
+        row = QHBoxLayout()
+        self.automation_runner_label = QLabel("Runner: IDLE")
+        row.addWidget(self.automation_runner_label)
+        self.automation_summary_label = QLabel("Total 0  |  PASS 0  |  FAIL 0  |  ERROR 0  |  BLOCKED 0  |  NOT RUN 0")
+        self.automation_summary_label.setObjectName("Muted")
+        row.addWidget(self.automation_summary_label)
+        row.addStretch()
+        open_button = QPushButton("OPEN TEST MANAGER")
+        open_button.setObjectName("OutlineButton")
+        open_button.clicked.connect(lambda: self._set_camera_subpage(1))
+        self.open_test_manager_button = open_button
+        row.addWidget(open_button)
+        card.body_layout.addLayout(row)
+        return card
 
     def _build_device_card(self):
         card = Card("Camera Device")
@@ -223,7 +372,7 @@ class CameraPage(QWidget):
 
     def _build_monitor_card(self):
         card = Card("Live Monitor")
-        self.monitor_table = QTableWidget(8, 3)
+        self.monitor_table = QTableWidget(10, 3)
         self.monitor_table.setHorizontalHeaderLabels(["Parameter", "Value", "Unit"])
         self._configure_read_only_table(self.monitor_table)
         header = self.monitor_table.horizontalHeader()
@@ -231,14 +380,16 @@ class CameraPage(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         rows = (
+            ("Configured FPS", "--", "fps"),
             ("Actual FPS", "--", "fps"),
             ("Frame Interval", "--", "ms"),
-            ("Dropped Frames", "0", "frames"),
             ("Frame Counter", "0", "frames"),
+            ("Dropped Frames (Estimated)", "0", "frames"),
+            ("Stream Duration", "00:00:00", ""),
+            ("Timestamp", "--", ""),
             ("Exposure", "--", ""),
             ("Gain", "--", ""),
             ("Temperature", "--", "°C"),
-            ("Timestamp", "--", ""),
         )
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
@@ -247,20 +398,10 @@ class CameraPage(QWidget):
         return card
 
     def _build_test_card(self):
-        card = Card()
-        header = QHBoxLayout()
-        title = QLabel("Test Case List")
-        title.setObjectName("CardTitle")
+        card = Card("Test Case Table")
+        card.setMinimumWidth(600)
         self.selected_tests_label = QLabel("0 / 0 Selected")
         self.selected_tests_label.setStyleSheet("color:#155EEF; font-weight:700;")
-        self.run_tests_button = QPushButton("▶  RUN SELECTED TESTS")
-        self.run_tests_button.setObjectName("PrimaryButton")
-        self.run_tests_button.clicked.connect(self._run_selected_tests)
-        header.addWidget(title)
-        header.addStretch()
-        header.addWidget(self.selected_tests_label)
-        header.addWidget(self.run_tests_button)
-        card.body_layout.addLayout(header)
 
         self.test_table = QTableWidget(0, 6)
         self.test_table.setHorizontalHeaderLabels(
@@ -269,12 +410,127 @@ class CameraPage(QWidget):
         self.test_table.verticalHeader().setVisible(False)
         self.test_table.setAlternatingRowColors(True)
         self.test_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.test_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.test_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.test_table.verticalHeader().setDefaultSectionSize(34)
+        self.test_table.setMinimumHeight(280)
         table_header = self.test_table.horizontalHeader()
-        for column in (0, 1, 3, 4, 5):
-            table_header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.test_table.setColumnWidth(0, 52)
+        for column in (1, 3, 4, 5):
+            table_header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        self.test_table.setColumnWidth(1, 105)
+        self.test_table.setColumnWidth(3, 165)
+        self.test_table.setColumnWidth(4, 110)
+        self.test_table.setColumnWidth(5, 110)
         table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.test_table.itemChanged.connect(self._update_selected_test_count)
+        self.test_table.cellClicked.connect(self._on_test_row_clicked)
         card.body_layout.addWidget(self.test_table)
+        return card
+
+    def _build_runner_status_card(self):
+        card = Card("Test Runner")
+        row = QHBoxLayout()
+        self.runner_state_label = QLabel("● IDLE")
+        self.runner_jetson_label = QLabel("Jetson: DISCONNECTED")
+        self.runner_camera_label = QLabel("Camera: NOT READY")
+        self.runner_device_label = QLabel("Device: --")
+        self.runner_serial_label = QLabel("SN: --")
+        for label in (self.runner_state_label, self.runner_jetson_label, self.runner_camera_label,
+                      self.runner_device_label, self.runner_serial_label):
+            row.addWidget(label)
+        row.addStretch()
+        card.body_layout.addLayout(row)
+        return card
+
+    def _build_test_filter_card(self):
+        card = Card()
+        row = QHBoxLayout()
+        self.test_search = QLineEdit()
+        self.test_search.setPlaceholderText("Search by Test ID or name...")
+        self.test_search.textChanged.connect(self._apply_test_filters)
+        self.test_category_filter = QComboBox()
+        self.test_category_filter.addItem("All")
+        self.test_category_filter.addItems(sorted({item.group for item in self.test_definitions}))
+        self.test_category_filter.currentTextChanged.connect(self._apply_test_filters)
+        self.test_status_filter = QComboBox()
+        self.test_status_filter.addItems(("All", "NOT RUN", "RUNNING", "PASS", "FAIL", "ERROR", "BLOCKED", "CANCELLED"))
+        self.test_status_filter.currentTextChanged.connect(self._apply_test_filters)
+        self.select_all_tests_button = QPushButton("Select All")
+        self.select_all_tests_button.setObjectName("SmallButton")
+        self.select_all_tests_button.clicked.connect(self._select_all_visible_tests)
+        self.clear_test_selection_button = QPushButton("Clear Selection")
+        self.clear_test_selection_button.setObjectName("SmallButton")
+        self.clear_test_selection_button.clicked.connect(self._clear_test_selection)
+        row.addWidget(self.test_search, 2)
+        row.addWidget(QLabel("Category:"))
+        row.addWidget(self.test_category_filter)
+        row.addWidget(QLabel("Status:"))
+        row.addWidget(self.test_status_filter)
+        row.addWidget(self.select_all_tests_button)
+        row.addWidget(self.clear_test_selection_button)
+        row.addWidget(self.selected_tests_label)
+        card.body_layout.addLayout(row)
+        return card
+
+    def _build_test_detail_card(self):
+        card = Card("Test Details")
+        card.setMinimumWidth(300)
+        self.test_detail_text = QTextEdit()
+        self.test_detail_text.setReadOnly(True)
+        self.test_detail_text.setText("Select a test case to view details.")
+        self.view_result_button = QPushButton("VIEW RESULT")
+        self.view_result_button.setObjectName("OutlineButton")
+        self.view_result_button.setEnabled(False)
+        self.view_result_button.clicked.connect(self._view_selected_test_result)
+        card.body_layout.addWidget(self.test_detail_text, 1)
+        card.body_layout.addWidget(self.view_result_button)
+        return card
+
+    def _build_test_control_card(self):
+        card = Card()
+        row = QHBoxLayout()
+        self.test_run_summary_label = QLabel("Total 0 | Selected 0 | PASS 0 | FAIL 0 | ERROR 0 | BLOCKED 0")
+        row.addWidget(self.test_run_summary_label)
+        row.addStretch()
+        self.run_tests_button = QPushButton("▶  RUN SELECTED TESTS")
+        self.run_tests_button.setObjectName("PrimaryButton")
+        self.run_tests_button.clicked.connect(self._run_selected_tests)
+        self.cancel_tests_button = QPushButton("■  CANCEL TEST RUN")
+        self.cancel_tests_button.setObjectName("DangerButton")
+        self.cancel_tests_button.setEnabled(False)
+        self.cancel_tests_button.clicked.connect(self._cancel_test_run)
+        row.addWidget(self.run_tests_button)
+        row.addWidget(self.cancel_tests_button)
+        card.body_layout.addLayout(row)
+        return card
+
+    def _build_test_log_card(self):
+        card = Card("Test Execution Log")
+        self.test_execution_log = QTextEdit()
+        self.test_execution_log.setObjectName("LiveLog")
+        self.test_execution_log.setReadOnly(True)
+        self.test_execution_log.setMinimumHeight(120)
+        card.body_layout.addWidget(self.test_execution_log)
+        return card
+
+    def _build_preview_card(self):
+        card = Card("Live Preview")
+        self.preview_label = CameraPreviewLabel()
+        card.body_layout.addWidget(self.preview_label)
+        footer = QHBoxLayout()
+        self.preview_state_label = QLabel("OFF")
+        self.preview_state_label.setObjectName("Muted")
+        self.preview_resolution_label = QLabel(f"{PREVIEW_WIDTH}x{PREVIEW_HEIGHT}")
+        self.preview_resolution_label.setObjectName("Muted")
+        self.preview_fps_label = QLabel("Preview FPS: --")
+        self.preview_fps_label.setObjectName("Muted")
+        footer.addWidget(self.preview_state_label)
+        footer.addStretch()
+        footer.addWidget(self.preview_resolution_label)
+        footer.addWidget(self.preview_fps_label)
+        card.body_layout.addLayout(footer)
         return card
 
     def _build_log_card(self):
@@ -378,9 +634,17 @@ class CameraPage(QWidget):
             and not is_connected
             and self.execution_host_combo.currentText() == "Jetson"
         ):
+            if self.connection_state == CameraConnectionState.STREAMING:
+                self.stream_controller.timer.stop()
+                self._stop_preview("LOST", "Preview unavailable")
+                self._set_state(CameraConnectionState.ERROR)
+                self.append_log("ERROR", "Jetson disconnected while camera streaming; remote stream status is unknown.")
             self.append_log(
                 "WARNING", "Connect Jetson from Dashboard first."
             )
+        self._refresh_runner_status()
+        if hasattr(self, "run_tests_button"):
+            self._update_selected_test_count()
 
     def _render_jetson_state(self):
         if self.jetson_service.is_connected:
@@ -430,25 +694,78 @@ class CameraPage(QWidget):
             self.append_log("INFO", f"FPS selected: {fps}")
 
     def _action_payload(self):
+        profile = self.camera_service.profile(self.model_combo.currentData())
+        stream = next(
+            (item for item in profile.stream_profiles if item.key == self.resolution_combo.currentData()),
+            None,
+        )
         return {
             "profile_id": self.model_combo.currentData(),
             "execution_host": self.execution_host_combo.currentText(),
             "device_id": self.device_combo.currentData(),
             "resolution_key": self.resolution_combo.currentData(),
-            "resolution": self.resolution_combo.currentText(),
+            "resolution": stream.resolution if stream else self.resolution_combo.currentText(),
             "fps": int(self.fps_combo.currentText() or 0),
             "pixel_format": self.format_combo.currentText(),
+            "preview_mode": PREVIEW_MODE,
+            "host_gstreamer_available": self.host_gstreamer.get("available", False),
+            "host_h264_decoder": self.host_gstreamer.get("decoder"),
         }
 
     def _request_action(self, action):
         if (
             (self.camera_worker and self.camera_worker.isRunning())
             or self.remote_request_id is not None
+            or self.stream_controller.pending_request_id is not None
         ):
             self.append_log("WARNING", "A camera operation is already running.")
             return
 
         remote = self.execution_host_combo.currentText() == "Jetson"
+        if remote and action == "start_stream":
+            if self.connection_state != CameraConnectionState.CONNECTED:
+                self.append_log("WARNING", "Start Stream requires a connected camera.")
+                return
+            payload = self._action_payload()
+            if not payload.get("device_id"):
+                self.append_log("ERROR", "Start Stream failed: select a camera serial number.")
+                return
+            if not self._require_jetson_connection("start stream"):
+                return
+            self.stream_start_requested.emit(payload)
+            self.append_log("INFO", "Start Stream requested")
+            self.append_log("INFO", f"Camera SN={payload['device_id']}")
+            self.append_log("INFO", f"Configuration: {payload['resolution_key']} {payload['resolution']} @ {payload['fps']} FPS")
+            self.append_log("INFO", "Starting remote CameraOne stream worker" if payload["profile_id"].startswith("zed_x_one") else "Starting remote stereo ZED stream worker")
+            self.append_log("INFO", f"Preview mode: {PREVIEW_MODE}.")
+            self.append_log("INFO", "Checking GStreamer capabilities.")
+            if self.host_gstreamer.get("available"):
+                self.append_log("INFO", f"Host GStreamer {self.host_gstreamer.get('version')} with decoder {self.host_gstreamer.get('decoder')}.")
+            else:
+                self.append_log("WARNING", f"GStreamer H.264 Preview unavailable on Host: {self.host_gstreamer.get('error')}.")
+                self.append_log("INFO", "Falling back to JPEG/TCP Preview.")
+            self._reset_stream_metrics(payload["fps"])
+            self._set_actions_enabled(False)
+            self.stream_controller.start(payload)
+            return
+        if remote and action == "stop_stream":
+            if self.connection_state != CameraConnectionState.STREAMING:
+                return
+            self.stream_stop_requested.emit(self._action_payload())
+            self.append_log("INFO", "Stop Stream requested")
+            self.append_log("INFO", "Waiting for remote stream worker to stop")
+            self._stop_preview("STOPPING", "Preview stopped")
+            self._set_actions_enabled(False)
+            self.stream_controller.stop()
+            return
+        if remote and action == "disconnect" and self.connection_state == CameraConnectionState.STREAMING:
+            self._disconnect_after_stop = True
+            self.append_log("INFO", "Disconnect requested; stopping camera stream first.")
+            self._stop_preview("STOPPING", "Preview stopped")
+            self._set_actions_enabled(False)
+            self.stream_controller.stop()
+            return
+
         action_text = action.replace("_", " ")
         if remote and not self._require_jetson_connection(action_text):
             return
@@ -627,11 +944,17 @@ class CameraPage(QWidget):
             self.append_log("INFO", f"{action.replace('_', ' ').title()} completed.")
 
     def _on_action_failed(self, action, error):
-        if action == "disconnect" and self.camera_service.is_connected("zed"):
+        if action in ("start_stream", "stop_stream"):
+            self._set_state(CameraConnectionState.CONNECTED)
+        elif action == "disconnect" and self.camera_service.is_connected("zed"):
             self._set_state(CameraConnectionState.CONNECTED)
         else:
             self._set_state(CameraConnectionState.DISCONNECTED)
-        self.append_log("ERROR", f"{action.replace('_', ' ').title()} failed: {error}")
+        if action == "stream_status":
+            self.append_log("ERROR", f"Stream metrics unavailable: {error}")
+            self.append_log("INFO", "Stream metrics monitoring stopped.")
+        else:
+            self.append_log("ERROR", f"{action.replace('_', ' ').title()} failed: {error}")
         if action == "connect":
             self.append_log("ERROR", f"Failed to open {self.model_combo.currentText()}")
             self.append_log(
@@ -639,6 +962,228 @@ class CameraPage(QWidget):
                 f"@ {self.fps_combo.currentText()} FPS",
             )
             self.append_log("ERROR", f"SDK error: {error}")
+
+    def _on_stream_started(self, result):
+        self._set_actions_enabled(True)
+        self._set_state(CameraConnectionState.STREAMING)
+        self.append_log("INFO", f"Remote stream PID: {result.get('pid', '-')}")
+        self.append_log("INFO", "Camera opened successfully on Jetson")
+        self.append_log("INFO", "Stream started")
+        self.append_log("INFO", "Stream metrics monitoring started.")
+        self.append_log("INFO", f"Configured stream: {self.resolution_combo.currentData()} @ {self.fps_combo.currentText()} FPS.")
+        self._update_monitor(result.get("status", {}))
+        self._start_preview(result.get("status", {}))
+
+    def _on_stream_stopped(self, result):
+        self._set_actions_enabled(True)
+        self._set_state(CameraConnectionState.CONNECTED)
+        if result.get("sigterm_used"):
+            self.append_log("WARNING", "Graceful stop timed out; SIGTERM fallback was used.")
+        self.append_log("INFO", "Camera closed safely")
+        self.append_log("INFO", "Stream stopped")
+        self.append_log("INFO", "Stream metrics monitoring stopped.")
+        self._stop_preview("OFF", "Preview stopped")
+        if self._shutdown_pending:
+            self._shutdown_pending = False
+            self.shutdown_ready.emit()
+            return
+        if self._disconnect_after_stop:
+            self._disconnect_after_stop = False
+            self._request_action("disconnect")
+
+    def _on_stream_failed(self, action, error):
+        if action == "preview_fallback":
+            self.append_log("WARNING", f"JPEG Preview fallback request failed: {error}")
+            self.append_log("WARNING", "Camera stream remains active without Live Preview.")
+            return
+        self._stop_preview("LOST", "Preview unavailable")
+        self._set_actions_enabled(True)
+        if action == "stop_stream":
+            self._set_state(CameraConnectionState.STREAMING)
+        elif self.jetson_service.is_connected:
+            self._set_state(CameraConnectionState.CONNECTED)
+        else:
+            self._set_state(CameraConnectionState.ERROR)
+        self.append_log("ERROR", f"{action.replace('_', ' ').title()} failed: {error}")
+        if self._shutdown_pending:
+            self._shutdown_pending = False
+            self.shutdown_ready.emit()
+
+    def _update_monitor(self, status):
+        values = (
+            status.get("configured_fps"), self._decimal_metric(status.get("actual_fps")),
+            self._decimal_metric(status.get("frame_interval_ms")), status.get("frame_count", 0),
+            status.get("dropped_frames", 0), self._format_duration(status.get("stream_duration_s")),
+            status.get("timestamp"), status.get("exposure"), status.get("gain"),
+            status.get("temperature"),
+        )
+        for row, value in enumerate(values):
+            if value is None or value == "": value = "--"
+            self.monitor_table.item(row, 1).setText(str(value))
+        if self.connection_state == CameraConnectionState.STREAMING:
+            self._check_stream_health(status)
+
+    def _reset_stream_metrics(self, configured_fps):
+        values = (configured_fps, "--", "--", 0, 0, "00:00:00", "--", "--", "--", "--")
+        for row, value in enumerate(values):
+            self.monitor_table.item(row, 1).setText(str(value))
+        self._previous_frame_count = None
+        self._unchanged_frame_polls = 0
+        self._stall_warning_active = False
+        self._low_fps_samples = 0
+        self._low_fps_warning_active = False
+        self._stable_fps_samples = 0
+        self._stable_fps_logged = False
+
+    @staticmethod
+    def _decimal_metric(value):
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "--"
+
+    @staticmethod
+    def _format_duration(seconds):
+        try:
+            total = max(0, int(float(seconds)))
+        except (TypeError, ValueError):
+            total = 0
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def _check_stream_health(self, status):
+        frame_count = status.get("frame_count")
+        if frame_count == self._previous_frame_count:
+            self._unchanged_frame_polls += 1
+        else:
+            self._unchanged_frame_polls = 0
+            self._stall_warning_active = False
+        self._previous_frame_count = frame_count
+        if self._unchanged_frame_polls >= 6 and not self._stall_warning_active:
+            self.append_log("WARNING", "Stream appears stalled: frame counter has not changed for 3 seconds.")
+            self._stall_warning_active = True
+
+        actual, configured = status.get("actual_fps"), status.get("configured_fps")
+        if isinstance(actual, (int, float)) and isinstance(configured, (int, float)) and configured > 0:
+            if actual < configured * 0.9:
+                self._low_fps_samples += 1
+                self._stable_fps_samples = 0
+            else:
+                self._low_fps_samples = 0
+                self._low_fps_warning_active = False
+                self._stable_fps_samples += 1
+            if self._low_fps_samples >= 3 and not self._low_fps_warning_active:
+                self.append_log("WARNING", f"Stream FPS below expected range: {actual:.1f} / {configured} FPS.")
+                self._low_fps_warning_active = True
+            if self._stable_fps_samples >= 3 and not self._stable_fps_logged:
+                self.append_log("INFO", f"Stream acquisition stable: Actual FPS {actual:.1f}.")
+                self._stable_fps_logged = True
+
+    def _start_preview(self, status):
+        self._stop_preview("OFF", "Starting preview...")
+        self.preview_state = "STARTING"
+        self.preview_state_label.setText("STARTING")
+        self.preview_frames_received = 0
+        self.preview_frames_displayed = 0
+        self.preview_frames_dropped = 0
+        self._preview_first_frame = False
+        backend = status.get("preview_backend", "jpeg_tcp")
+        self.preview_backend = backend
+        self._preview_fallback_used = backend == "jpeg_tcp" and PREVIEW_MODE != "JPEG_TCP"
+        self.append_log("INFO", "Live Preview initialization requested.")
+        self.append_log("INFO", f"Preview configuration: {PREVIEW_WIDTH}x{PREVIEW_HEIGHT} @ target {status.get('preview_target_fps', '--')} FPS.")
+        if backend == "gstreamer_h264":
+            port = int(status.get("h264_preview_port") or H264_PREVIEW_PORT)
+            decoder = self.host_gstreamer.get("decoder")
+            self.append_log("INFO", "GStreamer H.264 Preview supported.")
+            self.append_log("INFO", f"H.264 encoder: {status.get('preview_encoder', '--')}.")
+            self.append_log("INFO", f"Starting Host H.264 receiver on UDP port {port}.")
+            receiver = GStreamerPreviewReceiver(port, decoder, self)
+        else:
+            port = int(status.get("preview_port") or PREVIEW_PORT)
+            reason = status.get("preview_error")
+            if reason:
+                self.append_log("WARNING", f"GStreamer H.264 Preview unavailable: {reason}.")
+            if PREVIEW_MODE != "JPEG_TCP": self.append_log("INFO", "Falling back to JPEG/TCP Preview.")
+            self.append_log("INFO", f"Jetson JPEG preview server: {self.jetson_state.host}:{port} (worker binds 0.0.0.0).")
+            receiver = CameraPreviewReceiver(self.jetson_state.host, port, self)
+        receiver.connected.connect(self._on_preview_connected)
+        receiver.frame_received.connect(self._on_preview_frame)
+        receiver.failed.connect(self._on_preview_failed)
+        self.preview_receiver = receiver
+        receiver.start()
+
+    def _on_preview_connected(self):
+        codec = "H.264" if self.preview_backend == "gstreamer_h264" else "JPEG"
+        self.append_log("INFO", f"{codec} Preview receiver connected.")
+
+    def _on_preview_frame(self):
+        receiver = self.preview_receiver
+        if receiver is None:
+            return
+        frame = receiver.take_latest_frame()
+        if frame is None:
+            return
+        image, fps, jpeg_size, received = frame
+        self.preview_frames_received = received
+        self.preview_frames_displayed += 1
+        self.preview_frames_dropped = max(0, received - self.preview_frames_displayed)
+        self.preview_label.show_image(image)
+        self.preview_fps_label.setText(f"Preview FPS: {fps:.2f}")
+        if not self._preview_first_frame:
+            self._preview_first_frame = True
+            self.preview_state = "LIVE"
+            codec = "H.264" if self.preview_backend == "gstreamer_h264" else "JPEG"
+            self.preview_state_label.setText(f"LIVE | {codec}")
+            self.append_log("INFO", f"First {codec} Preview frame received.")
+            self.append_log("INFO", f"Live Preview started using {codec}.")
+
+    def _on_preview_failed(self, error):
+        if self.preview_state in ("STOPPING", "OFF"):
+            return
+        self.preview_state = "LOST"
+        self.preview_state_label.setText("LOST")
+        self.preview_label.show_message("Preview unavailable")
+        self.preview_fps_label.setText("Preview FPS: --")
+        self.append_log("WARNING", f"Preview connection lost: {error}")
+        if self.preview_backend == "gstreamer_h264" and not self._preview_fallback_used:
+            self._preview_fallback_used = True
+            self.append_log("INFO", "Requesting clean JPEG/TCP fallback on Jetson.")
+            self.stream_controller.request_preview_fallback()
+            return
+        self.append_log("WARNING", "Camera stream is active but Live Preview is unavailable.")
+
+    def _start_jpeg_fallback(self):
+        if self.connection_state != CameraConnectionState.STREAMING:
+            return
+        self._stop_preview("FALLBACK", "Starting JPEG fallback...")
+        self.preview_backend = "jpeg_tcp"
+        self.preview_state = "STARTING"
+        self.preview_state_label.setText("FALLBACK")
+        self.append_log("INFO", "Falling back to JPEG/TCP Preview.")
+        receiver = CameraPreviewReceiver(self.jetson_state.host, PREVIEW_PORT, self)
+        receiver.connected.connect(self._on_preview_connected)
+        receiver.frame_received.connect(self._on_preview_frame)
+        receiver.failed.connect(self._on_preview_failed)
+        self.preview_receiver = receiver
+        receiver.start()
+
+    def _stop_preview(self, state="OFF", message="Preview unavailable"):
+        receiver = self.preview_receiver
+        self.preview_receiver = None
+        was_running = receiver is not None and receiver.isRunning()
+        if was_running:
+            self.append_log("INFO", "Stopping Live Preview.")
+            receiver.stop()
+            if not receiver.wait(1500):
+                self.append_log("WARNING", "Preview receiver did not stop within timeout.")
+            else:
+                self.append_log("INFO", "Preview receiver stopped.")
+        self.preview_state = state
+        self.preview_state_label.setText(state)
+        self.preview_label.show_message(message)
+        self.preview_fps_label.setText("Preview FPS: --")
 
     def _set_state(self, state):
         self.connection_state = state
@@ -661,6 +1206,9 @@ class CameraPage(QWidget):
             self.device_chip.set_state("idle", "Device Not Ready")
             self.stream_chip.set_state("idle", "Stream Idle")
         self._update_button_states()
+        self._refresh_runner_status()
+        if hasattr(self, "run_tests_button"):
+            self._update_selected_test_count()
 
     def _update_button_states(self):
         connected = self.connection_state in (
@@ -669,6 +1217,8 @@ class CameraPage(QWidget):
         )
         streaming = self.connection_state == CameraConnectionState.STREAMING
         self.disconnect_button.setEnabled(connected)
+        self.connect_button.setEnabled(not connected)
+        self.discover_button.setEnabled(not connected)
         self.model_combo.setEnabled(not connected)
         self.execution_host_combo.setEnabled(not connected)
         self.device_combo.setEnabled(not connected)
@@ -715,17 +1265,26 @@ class CameraPage(QWidget):
 
     def _load_test_cases(self):
         self.test_table.blockSignals(True)
-        self.test_table.setRowCount(len(self.TEST_CASES))
-        for row, values in enumerate(self.TEST_CASES):
+        self.test_table.setRowCount(len(self.test_definitions))
+        for row, definition in enumerate(self.test_definitions):
+            self.test_statuses.setdefault(definition.test_id, "NOT RUN")
             select_item = QTableWidgetItem()
             select_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             select_item.setCheckState(Qt.CheckState.Unchecked)
             self.test_table.setItem(row, 0, select_item)
+            values = (
+                definition.test_id, definition.name, definition.group,
+                f"{int(definition.timeout_s)} s",
+            )
             for column, value in enumerate(values, start=1):
                 self.test_table.setItem(row, column, QTableWidgetItem(value))
-            self.test_table.setItem(row, 5, QTableWidgetItem("NOT RUN"))
+            self.test_table.setItem(row, 5, QTableWidgetItem(self.test_statuses[definition.test_id]))
         self.test_table.blockSignals(False)
         self._update_selected_test_count()
+        if self._test_definition_error:
+            self.append_log("ERROR", f"Camera test definition configuration error: {self._test_definition_error}")
+        self._refresh_test_summaries()
+        self._apply_test_filters()
 
     def _update_selected_test_count(self, *_):
         selected = sum(
@@ -734,7 +1293,132 @@ class CameraPage(QWidget):
         )
         total = self.test_table.rowCount()
         self.selected_tests_label.setText(f"{selected} / {total} Selected")
-        self.run_tests_button.setEnabled(selected > 0)
+        running = self.test_runner_worker is not None and self.test_runner_worker.isRunning()
+        prerequisites = self.jetson_service.is_connected and self.connection_state == CameraConnectionState.CONNECTED
+        self.run_tests_button.setEnabled(selected > 0 and not running and prerequisites)
+        self._refresh_test_summaries()
+
+    def _apply_test_filters(self, *_):
+        if not hasattr(self, "test_table"):
+            return
+        query = self.test_search.text().strip().lower() if hasattr(self, "test_search") else ""
+        category = self.test_category_filter.currentText() if hasattr(self, "test_category_filter") else "All"
+        status = self.test_status_filter.currentText() if hasattr(self, "test_status_filter") else "All"
+        for row in range(self.test_table.rowCount()):
+            test_id = self.test_table.item(row, 1).text()
+            name = self.test_table.item(row, 2).text()
+            group = self.test_table.item(row, 3).text()
+            row_status = self.test_statuses.get(test_id, "NOT RUN")
+            visible = (
+                (not query or query in test_id.lower() or query in name.lower())
+                and (category == "All" or category == group)
+                and (status == "All" or status == row_status)
+            )
+            self.test_table.setRowHidden(row, not visible)
+
+    def _select_all_visible_tests(self):
+        self.test_table.blockSignals(True)
+        for row in range(self.test_table.rowCount()):
+            if not self.test_table.isRowHidden(row):
+                self.test_table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+        self.test_table.blockSignals(False)
+        self._update_selected_test_count()
+
+    def _clear_test_selection(self):
+        self.test_table.blockSignals(True)
+        for row in range(self.test_table.rowCount()):
+            self.test_table.item(row, 0).setCheckState(Qt.CheckState.Unchecked)
+        self.test_table.blockSignals(False)
+        self._update_selected_test_count()
+
+    def _on_test_row_clicked(self, row, _column):
+        test_id = self.test_table.item(row, 1).text()
+        self._show_test_details(test_id)
+
+    def _show_test_details(self, test_id):
+        definition = next((item for item in self.test_definitions if item.test_id == test_id), None)
+        if definition is None:
+            self.test_detail_text.setText("Select a test case to view details.")
+            return
+        parameter_lines = "\n".join(
+            f"  {key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
+            for key, value in definition.parameters.items()
+        ) or "  --"
+        rule_lines = "\n".join(
+            f"  {rule['metric'].replace('_', ' ').title()} {rule['operator']} {self._format_detail_value(rule['expected'])}"
+            for rule in definition.rules
+        ) or "  --"
+        if definition.automation_key == "camera.resolution_fps":
+            p = definition.parameters
+            derived = [
+                f"  Width == {p.get('width')}",
+                f"  Height == {p.get('height')}",
+                "  Average FPS Ratio >= 0.95",
+            ]
+            if "max_drop_ratio" in p:
+                derived.append(f"  Drop Ratio <= {p['max_drop_ratio']}")
+            if p.get("require_timestamp_integrity"):
+                derived.extend(("  Duplicate Timestamp Count == 0", "  Timestamp Rollback Count == 0"))
+            rule_lines = "\n".join(derived)
+        status = self.test_statuses.get(test_id, "NOT RUN")
+        result = self.test_results.get(test_id)
+        measurement_lines = ""
+        if result:
+            measurements = result.get("measurements") or {}
+            measurement_lines = "\n\nMeasurements\n" + (
+                "\n".join(f"  {key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
+                          for key, value in measurements.items() if not isinstance(value, (dict, list))) or "  --"
+            )
+        self.test_detail_text.setPlainText(
+            f"{definition.test_id}\n{definition.name}\n\n"
+            f"Category\n  {definition.group}\n\nAutomation Key\n  {definition.automation_key}\n\n"
+            f"Handler Type\n  {type(self.test_registry.resolve(definition.automation_key)).__name__}\n\n"
+            f"Priority\n  {definition.priority}\n\nEstimated Timeout\n  {definition.timeout_s:g} seconds\n\n"
+            f"Configuration / Parameters\n{parameter_lines}\n\nAcceptance Criteria\n{rule_lines}\n\n"
+            f"Latest Result\n  {status}{measurement_lines}"
+        )
+        self.view_result_button.setEnabled(result is not None)
+        self.view_result_button.setProperty("test_id", test_id)
+
+    @staticmethod
+    def _format_detail_value(value):
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value)
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return "--" if value is None else str(value)
+
+    def _view_selected_test_result(self):
+        test_id = self.view_result_button.property("test_id")
+        result = self.test_results.get(test_id)
+        if not result:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Test Result — {test_id}")
+        dialog.resize(720, 620)
+        layout = QVBoxLayout(dialog)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        sections = []
+        for key in ("status", "started_at", "finished_at", "duration_s", "device", "configuration",
+                    "measurements", "rule_results", "failure_reasons", "error"):
+            sections.append(f"{key.replace('_', ' ').title()}\n{self._readable_result_value(result.get(key))}")
+        text.setPlainText("\n\n".join(sections))
+        close = QPushButton("CLOSE")
+        close.setObjectName("PrimaryButton")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(text, 1)
+        layout.addWidget(close)
+        dialog.exec()
+
+    @staticmethod
+    def _readable_result_value(value, indent=0):
+        prefix = "  " * indent
+        if isinstance(value, dict):
+            return "\n".join(f"{prefix}{key}: {CameraPage._readable_result_value(item, indent + 1)}" for key, item in value.items()) or "--"
+        if isinstance(value, list):
+            return "\n".join(f"{prefix}- {CameraPage._readable_result_value(item, indent + 1)}" for item in value) or "--"
+        return "--" if value is None else str(value)
 
     def _run_selected_tests(self):
         selected = [
@@ -745,14 +1429,144 @@ class CameraPage(QWidget):
         if not selected:
             return
         self.tests_requested.emit(selected)
-        self.append_log("INFO", "Run selected tests requested: " + ", ".join(selected))
-        self.append_log("WARNING", "Camera test execution is prepared but not implemented in Phase 1.")
+        definitions = [item for item in self.test_definitions if item.test_id in selected]
+        self._append_test_log("INFO", f"Test run started: {len(definitions)} selected cases.")
+        device = {
+            "profile_id": self.model_combo.currentData(),
+            "model": self.model_combo.currentText(),
+            "serial": self.device_combo.currentData(),
+        }
+        configuration = {
+            "manual_stream_active": self.connection_state == CameraConnectionState.STREAMING,
+            "camera_connected": self.connection_state == CameraConnectionState.CONNECTED,
+        }
+        worker = CameraTestRunnerWorker(
+            definitions, self.test_registry, self.jetson_service,
+            self.camera_service, device, configuration, self,
+        )
+        worker.test_started.connect(self._on_test_started)
+        worker.test_finished.connect(self._on_test_finished)
+        worker.log_event.connect(self._append_test_log)
+        worker.suite_finished.connect(self._on_test_suite_finished)
+        worker.finished.connect(self._on_test_worker_finished)
+        self.test_runner_worker = worker
+        self.run_tests_button.setEnabled(False)
+        self.cancel_tests_button.setEnabled(True)
+        self.test_table.setEnabled(False)
+        self.select_all_tests_button.setEnabled(False)
+        self.clear_test_selection_button.setEnabled(False)
+        self._set_actions_enabled(False)
+        worker.start()
+        self._refresh_test_summaries()
+
+    def _cancel_test_run(self):
+        if self.test_runner_worker and self.test_runner_worker.isRunning():
+            self._append_test_log("WARNING", "Cancelling Camera test run; cleanup will complete first.")
+            self.cancel_tests_button.setEnabled(False)
+            self.test_runner_worker.cancel()
+            self._refresh_test_summaries()
+
+    def _on_test_started(self, test_id):
+        self._set_test_status(test_id, "RUNNING")
+
+    def _on_test_finished(self, test_id, status, _result):
+        self.test_results[test_id] = _result
+        self._set_test_status(test_id, status)
+
+    def _on_test_suite_finished(self, summary, result_root):
+        self._append_test_log(
+            "INFO", "Test Run Complete — " + ", ".join(
+                f"{name}: {summary.get(name, 0)}"
+                for name in ("total", "PASS", "FAIL", "ERROR", "BLOCKED", "CANCELLED")
+            )
+        )
+        self._append_test_log("INFO", f"Structured results: {result_root}")
+
+    def _on_test_worker_finished(self):
+        self.test_runner_worker = None
+        self.cancel_tests_button.setEnabled(False)
+        self.test_table.setEnabled(True)
+        self.select_all_tests_button.setEnabled(True)
+        self.clear_test_selection_button.setEnabled(True)
+        self._set_actions_enabled(True)
+        self._update_selected_test_count()
+        if self._shutdown_pending:
+            self._shutdown_pending = False
+            self.shutdown_ready.emit()
+
+    def _set_test_status(self, test_id, status):
+        normalized = status.replace("_", " ")
+        self.test_statuses[test_id] = normalized
+        for row in range(self.test_table.rowCount()):
+            if self.test_table.item(row, 1).text() == test_id:
+                item = self.test_table.item(row, 5)
+                item.setText(normalized)
+                colors = {
+                    "RUNNING": "#155EEF", "PASS": "#16883F", "FAIL": "#D92D20",
+                    "ERROR": "#912018", "BLOCKED": "#B54708", "CANCELLED": "#667085",
+                    "NOT RUN": "#667085",
+                }
+                item.setForeground(QColor(colors.get(normalized, "#667085")))
+                break
+        self._apply_test_filters()
+        self._refresh_test_summaries()
+        if self.view_result_button.property("test_id") == test_id:
+            self._show_test_details(test_id)
+
+    def _refresh_test_summaries(self):
+        if not hasattr(self, "automation_summary_label"):
+            return
+        counts = {name: 0 for name in ("PASS", "FAIL", "ERROR", "BLOCKED", "RUNNING", "CANCELLED", "NOT RUN")}
+        for status in self.test_statuses.values():
+            counts[status] = counts.get(status, 0) + 1
+        total = len(self.test_definitions)
+        selected = 0
+        if hasattr(self, "test_table"):
+            selected = sum(
+                self.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
+                for row in range(self.test_table.rowCount())
+            )
+        running = self.test_runner_worker is not None and self.test_runner_worker.isRunning()
+        runner = "RUNNING" if running else "IDLE"
+        self.automation_runner_label.setText(f"Runner: {runner}")
+        self.automation_summary_label.setText(
+            f"Total {total}  |  PASS {counts['PASS']}  |  FAIL {counts['FAIL']}  |  "
+            f"ERROR {counts['ERROR']}  |  BLOCKED {counts['BLOCKED']}  |  NOT RUN {counts['NOT RUN']}"
+        )
+        self.test_run_summary_label.setText(
+            f"Total {total} | Selected {selected} | PASS {counts['PASS']} | FAIL {counts['FAIL']} | "
+            f"ERROR {counts['ERROR']} | BLOCKED {counts['BLOCKED']}"
+        )
+        self._refresh_runner_status()
+
+    def _refresh_runner_status(self):
+        if not hasattr(self, "runner_state_label"):
+            return
+        running = self.test_runner_worker is not None and self.test_runner_worker.isRunning()
+        cancelling = running and self.test_runner_worker.cancel_event.is_set()
+        state = "CANCELLING" if cancelling else "RUNNING" if running else "IDLE"
+        self.runner_state_label.setText(f"● {state}")
+        self.runner_jetson_label.setText(f"Jetson: {'CONNECTED' if self.jetson_service.is_connected else 'DISCONNECTED'}")
+        ready = self.connection_state == CameraConnectionState.CONNECTED
+        self.runner_camera_label.setText(f"Camera: {'READY' if ready else 'NOT READY'}")
+        model = self.model_combo.currentText() if hasattr(self, "model_combo") else "--"
+        serial = self.device_combo.currentData() if hasattr(self, "device_combo") else None
+        self.runner_device_label.setText(f"Device: {model or '--'}")
+        self.runner_serial_label.setText(f"SN: {serial or '--'}")
+
+    def _append_test_log(self, level, message):
+        self._append_log_widget(self.test_execution_log, level, message)
 
     def append_log(self, level, message):
+        self._append_log_widget(self.live_log, level, message)
+
+    def _append_log_widget(self, widget, level, message):
         timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
         level = level.upper()
         colors = {
             "INFO": "#3FB950",
+            "PASS": "#3FB950",
+            "FAIL": "#F85149",
             "WARNING": "#D29922",
             "ERROR": "#F85149",
             "DEBUG": "#58A6FF",
@@ -763,9 +1577,9 @@ class CameraPage(QWidget):
             f'{html.escape(level):7s}</span>&nbsp;&nbsp;'
             f'<span style="color:#E6EDF3">{html.escape(message)}</span>'
         )
-        self.live_log.append(line)
-        if self.auto_scroll_check.isChecked():
-            bar = self.live_log.verticalScrollBar()
+        widget.append(line)
+        if widget is not self.live_log or self.auto_scroll_check.isChecked():
+            bar = widget.verticalScrollBar()
             bar.setValue(bar.maximum())
 
     def live_log_clear(self):
@@ -785,3 +1599,17 @@ class CameraPage(QWidget):
         self._set_state(CameraConnectionState.DISCONNECTED)
         self.run_tests_button.setEnabled(False)
         self.append_log("INFO", "Camera workspace ready. Select a profile to begin.")
+
+    def shutdown_stream(self):
+        if self.test_runner_worker and self.test_runner_worker.isRunning():
+            self._shutdown_pending = True
+            self.append_log("INFO", "Application shutdown: cancelling Camera test run.")
+            self.test_runner_worker.cancel()
+        elif self.connection_state == CameraConnectionState.STREAMING:
+            self._shutdown_pending = True
+            self.append_log("INFO", "Application shutdown: stopping camera stream.")
+            self._stop_preview("STOPPING", "Preview stopped")
+            self._set_actions_enabled(False)
+            self.stream_controller.stop()
+        else:
+            self.shutdown_ready.emit()

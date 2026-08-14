@@ -134,6 +134,12 @@ QPushButton#OutlineButton:hover {
     background: #EFF4FF;
 }
 
+QPushButton#OutlineButton:checked {
+    background: #EAF2FF;
+    border-color: #155EEF;
+    color: #155EEF;
+}
+
 QPushButton#OutlineButton:disabled {
     background: #F2F4F7;
     border-color: #D0D5DD;
