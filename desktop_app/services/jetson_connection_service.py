@@ -21,6 +21,10 @@ class JetsonConnectionService(QObject):
     connection_failed = Signal(str)
     operation_succeeded = Signal(str, object)
     operation_failed = Signal(str, str)
+    remote_process_started = Signal(str)
+    remote_process_output = Signal(str, str, str)
+    remote_process_finished = Signal(str, int)
+    remote_process_failed = Signal(str, str)
 
     def __init__(self, state: JetsonState, parent=None):
         super().__init__(parent)
@@ -34,6 +38,18 @@ class JetsonConnectionService(QObject):
             self.operation_succeeded.emit
         )
         self._worker.operation_failed.connect(self.operation_failed.emit)
+        self._worker.remote_process_started.connect(
+            self.remote_process_started.emit
+        )
+        self._worker.remote_process_output.connect(
+            self.remote_process_output.emit
+        )
+        self._worker.remote_process_finished.connect(
+            self.remote_process_finished.emit
+        )
+        self._worker.remote_process_failed.connect(
+            self.remote_process_failed.emit
+        )
         self._worker.start()
 
     @property
@@ -68,6 +84,17 @@ class JetsonConnectionService(QObject):
         request_id = f"{name}:{next(self._request_ids)}"
         self._worker.submit_operation(request_id, operation)
         return request_id
+
+    def start_remote_process(self, name: str, command: str) -> str | None:
+        """Start a managed process without occupying the operation lock."""
+        if not self.is_connected:
+            return None
+        request_id = f"{name}:{next(self._request_ids)}"
+        self._worker.start_remote_process(request_id, command)
+        return request_id
+
+    def stop_remote_process(self, request_id: str) -> None:
+        self._worker.stop_remote_process(request_id)
 
     def update_network_snapshot(self, network_snapshot: dict) -> None:
         if self.is_connected:

@@ -13,10 +13,19 @@ from PySide6.QtWidgets import (
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
+from desktop_app.services.lidar_discovery_service import (
+    LidarDiscoveryService,
+)
+from desktop_app.services.lidar_stream_service import LidarStreamService
+from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
+from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
+from desktop_app.testing.lidar_tests import build_lidar_test_registry
+from desktop_app.testing.test_execution_service import TestExecutionService
+from devices.livox.profile import load_default_livox_profile
 
 
 class PlaceholderPage(QWidget):
@@ -59,9 +68,30 @@ class MainWindow(QMainWindow):
         self.resize(1500, 920)
         self.setMinimumSize(1180, 720)
         self.jetson_state = JetsonState(self)
+        self.device_registry = DeviceRegistry(self)
         self.jetson_service = JetsonConnectionService(
             self.jetson_state,
             self,
+        )
+        self.livox_network_profile = load_default_livox_profile()
+        self.lidar_runtime_state = LidarRuntimeState(self)
+        self.lidar_stream_service = LidarStreamService(
+            self.jetson_service,
+            self.lidar_runtime_state,
+            self.livox_network_profile,
+            self,
+        )
+        self.lidar_discovery_service = LidarDiscoveryService(
+            self.jetson_service,
+            self.livox_network_profile,
+            self,
+        )
+        self.test_registry = build_lidar_test_registry(
+            self.livox_network_profile
+        )
+        self.test_execution_service = TestExecutionService(
+            self.test_registry,
+            parent=self,
         )
         self._build_ui()
 
@@ -126,6 +156,7 @@ class MainWindow(QMainWindow):
                 self.dashboard_page = DashboardPage(
                     self.jetson_state,
                     self.jetson_service,
+                    self.device_registry,
                 )
                 self.dashboard_page.navigate_requested.connect(
                     self.navigate_to
@@ -144,6 +175,13 @@ class MainWindow(QMainWindow):
                 self.lidar_page = LidarPage(
                     self.jetson_state,
                     self.jetson_service,
+                    self.device_registry,
+                    self.lidar_runtime_state,
+                    self.lidar_stream_service,
+                    self.lidar_discovery_service,
+                    self.test_registry,
+                    self.test_execution_service,
+                    network_profile=self.livox_network_profile,
                 )
                 self.pages.addWidget(self.lidar_page)
             else:
@@ -173,5 +211,8 @@ class MainWindow(QMainWindow):
         self.dashboard_page.updated_label.setText("Updated just now")
 
     def closeEvent(self, event):
+        if self.test_execution_service.running:
+            self.test_execution_service.cancel()
+        self.lidar_stream_service.shutdown()
         self.jetson_service.shutdown()
         super().closeEvent(event)

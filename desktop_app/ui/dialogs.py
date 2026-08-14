@@ -1,77 +1,17 @@
+import json
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QPushButton,
-    QSpinBox,
-    QComboBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
-
-class TemporaryIPDialog(QDialog):
-    def __init__(
-        self,
-        interfaces: list[str],
-        candidate: str | None = None,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.setWindowTitle("Configure Jetson LiDAR IP")
-        self.setMinimumWidth(420)
-
-        root = QVBoxLayout(self)
-        form = QFormLayout()
-
-        self.interface_combo = QComboBox()
-        ordered = list(interfaces)
-        if candidate in ordered:
-            ordered.remove(candidate)
-            ordered.insert(0, candidate)
-        self.interface_combo.addItems(ordered)
-
-        self.ip_input = QLineEdit()
-        self.ip_input.setPlaceholderText("Example: 192.168.1.20")
-
-        self.prefix_input = QSpinBox()
-        self.prefix_input.setRange(1, 32)
-        self.prefix_input.setValue(24)
-
-        self.sudo_input = QLineEdit()
-        self.sudo_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sudo_input.setPlaceholderText(
-            "Leave empty if sudo NOPASSWD is configured"
-        )
-
-        form.addRow("Interface:", self.interface_combo)
-        form.addRow("Jetson LiDAR IP:", self.ip_input)
-        form.addRow("Prefix:", self.prefix_input)
-        form.addRow("sudo password:", self.sudo_input)
-        root.addLayout(form)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
-            "Apply Temporary IP"
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
-    def values(self) -> dict:
-        return {
-            "interface": self.interface_combo.currentText(),
-            "ip_address": self.ip_input.text().strip(),
-            "prefix": self.prefix_input.value(),
-            "sudo_password": self.sudo_input.text() or None,
-        }
 
 
 class _BaseInfoDialog(QDialog):
@@ -132,13 +72,11 @@ class DeviceOverviewDialog(_BaseInfoDialog):
     def __init__(self, device_data: dict | None = None, parent=None):
         data = {
             "Vendor": "Livox",
-            "Device Family": "Livox LiDAR",
             "Selected Model": "-",
             "Detected Model": "-",
-            "Serial Number": "-",
-            "Firmware Version": "-",
+            "Serial": "-",
+            "LiDAR IP": "-",
             "SDK Version": "-",
-            "Device Type": "-",
             "Status": "-",
         }
         data.update(device_data or {})
@@ -157,39 +95,69 @@ class NetworkSummaryDialog(_BaseInfoDialog):
 
         rows = [
             (
-                "SSH Management Interface",
-                data.get("management_interface", "-"),
-                data.get("management_status", "-"),
+                "Interface",
+                data.get("interface", "-"),
+                "PHYSICAL" if data.get("physical") else "NOT PHYSICAL",
             ),
             (
-                "Jetson SSH IP",
-                data.get("ssh_ip", "-"),
-                data.get("ssh_status", "-"),
+                "MAC",
+                data.get("mac_address", "-"),
+                "OBSERVED",
             ),
             (
-                "LiDAR Interface",
-                data.get("lidar_interface", "-"),
-                data.get("interface_status", "-"),
+                "State",
+                data.get("state", "-"),
+                "UP / LOWER_UP REQUIRED",
             ),
             (
-                "Jetson LiDAR IP",
-                data.get("jetson_lidar_ip", "-"),
-                data.get("subnet_status", "-"),
+                "Carrier",
+                data.get("carrier", "-"),
+                "UP REQUIRED",
+            ),
+            (
+                "Jetson IP",
+                data.get("jetson_ip", "-"),
+                f"EXPECTED {data.get('expected_jetson_cidr', '-')}",
             ),
             (
                 "LiDAR IP",
                 data.get("lidar_ip", "-"),
-                data.get("lidar_ip_status", "-"),
+                "READ-ONLY",
             ),
             (
-                "Ping LiDAR",
-                data.get("ping", "-"),
+                "Network",
+                data.get("network", "-"),
+                "EXPECTED",
+            ),
+            (
+                "Gateway",
+                data.get("gateway", "None / Not Required"),
+                "NOT REQUIRED",
+            ),
+            (
+                "Ping",
+                data.get("ping", "Not run"),
                 data.get("ping_status", "NOT RUN"),
             ),
             (
-                "Link Status",
+                "Link",
                 data.get("link", "-"),
-                data.get("link_status", "-"),
+                "PASS" if data.get("link_ready") else "FAIL",
+            ),
+            (
+                "Verification",
+                data.get("verification_status", "NOT_VERIFIED"),
+                "PASS"
+                if data.get("verification_status") == "NETWORK_READY"
+                else "FAIL",
+            ),
+            (
+                "Status",
+                data.get("status", "NOT_VERIFIED"),
+                "PASS"
+                if data.get("status")
+                in {"NETWORK READY", "LIDAR REACHABLE", "READY"}
+                else "FAIL",
             ),
         ]
 
@@ -205,25 +173,22 @@ class NetworkProtocolDialog(_BaseInfoDialog):
     def __init__(self, protocol_data: dict | None = None, parent=None):
         data = {
             "LiDAR IP": "-",
+            "LiDAR IP Access": "-",
+            "Expected Serial": "-",
+            "Jetson LiDAR Interface": "-",
             "Jetson LiDAR Host IP": "-",
-            "LiDAR Control Port": "56100",
-            "LiDAR Push Message Port": "56200",
-            "LiDAR Point Data Port": "56300",
-            "LiDAR IMU Data Port": "56400",
-            "LiDAR Log Data Port": "56500",
-            "Host Control Port": "56101",
-            "Host Push Message Port": "56201",
-            "Host Point Data Port": "56301",
-            "Host IMU Data Port": "56401",
-            "Host Log Data Port": "56501",
+            "Discovery Port": "-",
+            "LiDAR Control Port": "-",
+            "LiDAR Push Message Port": "-",
+            "LiDAR Point Data Port": "-",
+            "LiDAR IMU Data Port": "-",
+            "LiDAR Log Data Port": "-",
+            "Host Control Port": "-",
+            "Host Push Message Port": "-",
+            "Host Point Data Port": "-",
+            "Host IMU Data Port": "-",
+            "Host Log Data Port": "-",
             "Gateway Address": "-",
-            "Subnet Mask": "-",
-            "Firmware Version": "-",
-            "Work Mode": "-",
-            "Scan Pattern": "-",
-            "Data Type": "-",
-            "Time Sync Type": "-",
-            "FOV Enable": "-",
         }
         data.update(protocol_data or {})
 
@@ -231,5 +196,153 @@ class NetworkProtocolDialog(_BaseInfoDialog):
             title="Network & Protocol",
             columns=["Parameter", "Value"],
             rows=[(key, value) for key, value in data.items()],
+            parent=parent,
+        )
+
+
+class LidarDeviceInformationDialog(QDialog):
+    """Present LiDAR identity, network, and protocol data in one dialog."""
+
+    def __init__(
+        self,
+        device_data: dict | None = None,
+        network_data: dict | None = None,
+        protocol_data: dict | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("LiDAR Device Information")
+        self.resize(780, 570)
+
+        root = QVBoxLayout(self)
+        title_label = QLabel("LiDAR Device Information")
+        title_label.setStyleSheet("font-size:17px; font-weight:700;")
+        root.addWidget(title_label)
+
+        self.tabs = QTabWidget()
+        self.device_table = self._add_tab(
+            "Device", self._device_rows(device_data or {})
+        )
+        self.network_table = self._add_tab(
+            "Network", self._network_rows(network_data or {})
+        )
+        self.protocol_table = self._add_tab(
+            "Protocol",
+            [(key, value) for key, value in (protocol_data or {}).items()],
+        )
+        root.addWidget(self.tabs)
+
+        close_button = QPushButton("Close")
+        close_button.setObjectName("SmallButton")
+        close_button.clicked.connect(self.close)
+        root.addWidget(close_button)
+
+    def _add_tab(self, title: str, rows: list[tuple]) -> QTableWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        table = QTableWidget(len(rows), 2)
+        table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        for row_index, row_values in enumerate(rows):
+            for column_index, value in enumerate(row_values):
+                table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+        layout.addWidget(table)
+        self.tabs.addTab(page, title)
+        return table
+
+    @staticmethod
+    def _device_rows(data: dict) -> list[tuple]:
+        ordered_keys = (
+            "Vendor",
+            "Selected Model",
+            "Detected Model",
+            "Serial",
+            "LiDAR IP",
+            "Jetson Host IP",
+            "SDK Version",
+            "Status",
+            "Model Check",
+            "Serial Check",
+            "LiDAR IP Check",
+            "Device Type",
+        )
+        return [(key, data.get(key, "-")) for key in ordered_keys]
+
+    @staticmethod
+    def _network_rows(data: dict) -> list[tuple]:
+        return [
+            ("Jetson LiDAR Interface", data.get("interface", "-")),
+            ("MAC", data.get("mac_address", "-")),
+            ("State", data.get("state", "-")),
+            ("Carrier", data.get("carrier", "-")),
+            ("Jetson Host IP", data.get("jetson_ip", "-")),
+            ("LiDAR IP", data.get("lidar_ip", "-")),
+            ("Network", data.get("network", "-")),
+            ("Gateway", data.get("gateway", "None / Not Required")),
+            (
+                "Ping",
+                f"{data.get('ping', 'Not run')} "
+                f"({data.get('ping_status', 'NOT RUN')})",
+            ),
+            (
+                "Network Verification",
+                data.get("verification_status", "NOT_VERIFIED"),
+            ),
+        ]
+
+
+class TestDetailsDialog(_BaseInfoDialog):
+    def __init__(self, definition, result=None, parent=None):
+        result_data = result.to_dict() if result is not None else {}
+        rows = [
+            ("ID", definition.id),
+            ("Name", definition.name),
+            ("Group", definition.group),
+            ("Description", definition.description),
+            ("Automation", definition.automation_level.value),
+            ("Priority", definition.priority),
+            ("Timeout", f"{definition.timeout_sec:.1f} s"),
+            (
+                "Preconditions",
+                ", ".join(definition.prerequisites) or "None",
+            ),
+            ("Last Result", result_data.get("status", "NOT_RUN")),
+            (
+                "Duration",
+                f"{result_data.get('duration_sec'):.3f} s"
+                if result_data.get("duration_sec") is not None
+                else "-",
+            ),
+            ("Actual Result", result_data.get("actual_result", "-")),
+            (
+                "Measurements",
+                json.dumps(
+                    result_data.get("measurements", {}),
+                    sort_keys=True,
+                ),
+            ),
+            ("Error", result_data.get("error") or "-"),
+            (
+                "Evidence",
+                "\n".join(result_data.get("evidence", [])) or "-",
+            ),
+        ]
+        super().__init__(
+            title=f"Test Details — {definition.id}",
+            columns=["Parameter", "Value"],
+            rows=rows,
             parent=parent,
         )

@@ -68,6 +68,12 @@ class SSHManager:
             exit_status=result.exit_status,
         )
 
+    async def create_process(self, command: str):
+        """Start a remote process on the existing SSH connection."""
+        if self._connection is None:
+            raise RuntimeError("SSH connection is not established")
+        return await self._connection.create_process(command)
+
     async def run_sudo(
         self,
         command: str,

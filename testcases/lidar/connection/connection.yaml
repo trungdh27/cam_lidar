@@ -1,21 +1,72 @@
+catalog_id: livox_fixed_connection
+profile: livox_mid360_family
+mode: VERIFY_ONLY
+
+result_schema:
+  - test_id
+  - status
+  - expected
+  - actual
+  - message
+  - metrics
+  - timestamp
+
 tests:
   - id: LID-CON-001
-    name: SSH Connection
-    group: Connectivity
-    automation: AUTO
-  - id: LID-CON-002
     name: Ethernet Interface Detection
     group: Connectivity
-    automation: AUTO
+    expected:
+      interface: enxec9a0c19f45f
+      physical: true
+
+  - id: LID-CON-002
+    name: Jetson LiDAR Network Verification
+    group: Connectivity
+    operation: VERIFY_ONLY
+    expected:
+      interface: enxec9a0c19f45f
+      jetson_cidr: 192.168.1.5/24
+      lidar_ip: 192.168.1.162
+      network: 192.168.1.0/24
+      gateway_required: false
+      default_route_required: false
+
   - id: LID-CON-003
-    name: Ethernet Link Status
+    name: LiDAR Ping
     group: Connectivity
-    automation: AUTO
+    expected:
+      source_interface: enxec9a0c19f45f
+      target_ip: 192.168.1.162
+      minimum_received_packets: 1
+
   - id: LID-CON-004
-    name: Livox SDK2 Device Discovery
+    name: Livox SDK2 Environment Check
     group: Connectivity
-    automation: AUTO
+    expected:
+      helper_installed: true
+      helper_executable: true
+      sdk_version_available: true
+
   - id: LID-CON-005
-    name: Model / Serial / LiDAR IP Identification
+    name: Device Discovery
     group: Connectivity
-    automation: AUTO
+    expected:
+      found: true
+
+  - id: LID-CON-006
+    name: LiDAR IP Verification
+    group: Connectivity
+    operation: VERIFY_ONLY
+    expected:
+      lidar_ip: 192.168.1.162
+      access: READ_ONLY
+
+  - id: LID-CON-007
+    name: Model and Serial Identification
+    group: Connectivity
+    expected:
+      supported_models:
+        - MID360
+        - MID360S
+      serial: ARMCP4D0032262
+      strict_serial_verification: false

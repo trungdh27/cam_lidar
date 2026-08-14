@@ -28,7 +28,7 @@ Jetson
 - Live Log
 - `SSHManager`
 - `NetworkManager`
-- `TemporaryIPManager`
+- Validated fixed Livox network profile
 - Livox SDK2 Python backend
 - Livox native C++ discovery helper for Jetson
 - MID-360 / MID-360S identification
@@ -99,13 +99,23 @@ Then verify:
 ssh huu@192.168.9.169 '~/.cam_lidar/bin/livox_discover --version'
 ```
 
+Run fixed-profile discovery directly on Jetson:
+
+```bash
+~/.cam_lidar/bin/livox_discover \
+  --host-ip 192.168.1.5 \
+  --expected-lidar-ip 192.168.1.162 \
+  --model MID360 \
+  --timeout 8
+```
+
 ## Normal UI flow
 
 ```text
 CONNECT
   -> inspect Jetson networking
-CONFIGURE IP
-  -> add a temporary IPv4 only to the safe LiDAR Ethernet NIC
+VALIDATE FIXED PROFILE
+  -> compare the Jetson NIC and IPv4 address without changing them
 AUTO DISCOVER
   -> Livox SDK2 helper on Jetson
   -> model / serial / LiDAR IP
