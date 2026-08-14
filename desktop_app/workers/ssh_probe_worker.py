@@ -14,6 +14,10 @@ class SSHProbeWorker(QThread):
     disconnected = Signal()
     operation_succeeded = Signal(str, object)
     operation_failed = Signal(str, str)
+    remote_process_started = Signal(str)
+    remote_process_output = Signal(str, str, str)
+    remote_process_finished = Signal(str, int)
+    remote_process_failed = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,6 +27,8 @@ class SSHProbeWorker(QThread):
         self._operation_lock = None
         self._pending = []
         self._pending_lock = Lock()
+        self._remote_processes = {}
+        self._remote_process_tasks = {}
 
     def run(self):
         loop = asyncio.new_event_loop()
@@ -60,6 +66,18 @@ class SSHProbeWorker(QThread):
         self._schedule(
             lambda: asyncio.create_task(
                 self._execute_operation(request_id, operation)
+            )
+        )
+
+    def start_remote_process(self, request_id: str, command: str) -> None:
+        self._schedule(
+            lambda: self._create_remote_process_task(request_id, command)
+        )
+
+    def stop_remote_process(self, request_id: str) -> None:
+        self._schedule(
+            lambda: asyncio.create_task(
+                self._stop_remote_process(request_id)
             )
         )
 
@@ -128,6 +146,121 @@ class SSHProbeWorker(QThread):
                 f"{type(exc).__name__}: {exc}",
             )
 
+    def _create_remote_process_task(
+        self,
+        request_id: str,
+        command: str,
+    ) -> None:
+        current = self._remote_process_tasks.get(request_id)
+        if current is not None and not current.done():
+            self.remote_process_failed.emit(
+                request_id,
+                "Remote process is already running",
+            )
+            return
+        task = asyncio.create_task(
+            self._run_remote_process(request_id, command)
+        )
+        self._remote_process_tasks[request_id] = task
+
+    async def _run_remote_process(
+        self,
+        request_id: str,
+        command: str,
+    ) -> None:
+        if self._ssh is None or not self._ssh.connected:
+            self.remote_process_failed.emit(
+                request_id,
+                "Jetson is not connected. Connect from Dashboard first.",
+            )
+            self._remote_process_tasks.pop(request_id, None)
+            return
+
+        process = None
+        readers = []
+        try:
+            process = await self._ssh.create_process(command)
+            self._remote_processes[request_id] = process
+            readers = [
+                asyncio.create_task(
+                    self._read_remote_output(
+                        request_id,
+                        "stdout",
+                        process.stdout,
+                    )
+                ),
+                asyncio.create_task(
+                    self._read_remote_output(
+                        request_id,
+                        "stderr",
+                        process.stderr,
+                    )
+                ),
+            ]
+            self.remote_process_started.emit(request_id)
+            result = await process.wait()
+            await asyncio.gather(*readers, return_exceptions=True)
+            exit_status = getattr(result, "exit_status", None)
+            if exit_status is None:
+                exit_status = process.exit_status
+            self.remote_process_finished.emit(
+                request_id,
+                int(exit_status if exit_status is not None else -1),
+            )
+        except asyncio.CancelledError:
+            if process is not None:
+                process.kill()
+            raise
+        except Exception as exc:
+            self.remote_process_failed.emit(
+                request_id,
+                f"{type(exc).__name__}: {exc}",
+            )
+        finally:
+            for reader in readers:
+                if not reader.done():
+                    reader.cancel()
+            self._remote_processes.pop(request_id, None)
+            self._remote_process_tasks.pop(request_id, None)
+
+    async def _read_remote_output(
+        self,
+        request_id: str,
+        stream_name: str,
+        stream,
+    ) -> None:
+        async for line in stream:
+            self.remote_process_output.emit(
+                request_id,
+                stream_name,
+                str(line).rstrip("\r\n"),
+            )
+
+    async def _stop_remote_process(self, request_id: str) -> None:
+        process = self._remote_processes.get(request_id)
+        task = self._remote_process_tasks.get(request_id)
+        if process is None or task is None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _stop_all_remote_processes(self) -> None:
+        request_ids = list(self._remote_process_tasks)
+        if not request_ids:
+            return
+        await asyncio.gather(
+            *(self._stop_remote_process(item) for item in request_ids),
+            return_exceptions=True,
+        )
+
     async def _disconnect(self, emit_signal: bool) -> None:
         connect_task = self._connect_task
         current_task = asyncio.current_task()
@@ -138,6 +271,7 @@ class SSHProbeWorker(QThread):
         ):
             connect_task.cancel()
             await asyncio.gather(connect_task, return_exceptions=True)
+        await self._stop_all_remote_processes()
         await self._close_connection()
         if emit_signal:
             self.disconnected.emit()

@@ -8,7 +8,7 @@ fi
 
 TARGET="$1"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$PROJECT_DIR/jetson_tools/livox_discovery"
+SOURCE="$PROJECT_DIR/jetson_tools/livox_stream"
 REMOTE_SOURCE_ROOT=".cam_lidar_src"
 
 for command_name in ssh scp; do
@@ -20,7 +20,7 @@ done
 
 for required_file in CMakeLists.txt main.cpp; do
     if [[ ! -f "$SOURCE/$required_file" ]]; then
-        echo "[ERROR] Missing helper source: $SOURCE/$required_file" >&2
+        echo "[ERROR] Missing stream helper source: $SOURCE/$required_file" >&2
         exit 1
     fi
 done
@@ -34,14 +34,12 @@ if [[ "$architecture" != "aarch64" && "$architecture" != "arm64" ]]; then
     echo "[ERROR] Expected Jetson aarch64, got: $architecture" >&2
     exit 1
 fi
-
 for command_name in cmake c++ readelf; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "[ERROR] Required build command is missing: $command_name" >&2
         exit 1
     fi
 done
-
 for header in livox_lidar_api.h livox_lidar_def.h; do
     if [[ ! -r "/usr/local/include/$header" ]]; then
         echo "[ERROR] Missing Livox SDK2 header: /usr/local/include/$header" >&2
@@ -63,43 +61,32 @@ if [[ -z "$sdk_library" ]] && command -v ldconfig >/dev/null 2>&1; then
             | awk '/liblivox_lidar_sdk_shared\.so/ && !found {print $NF; found=1}'
     )"
 fi
-if [[ -z "$sdk_library" ]]; then
-    echo "[ERROR] Livox SDK2 library was not found in /usr/local/lib," \
-        "aarch64 system paths, or ldconfig." >&2
-    exit 1
-fi
-if [[ ! -r "$sdk_library" ]]; then
-    echo "[ERROR] Livox SDK2 library is not readable: $sdk_library" >&2
+if [[ -z "$sdk_library" || ! -r "$sdk_library" ]]; then
+    echo "[ERROR] Livox SDK2 library was not found or is not readable." >&2
     exit 1
 fi
 
+mkdir -p "$HOME/.cam_lidar_src" "$HOME/.cam_lidar/bin"
+rm -rf "$HOME/.cam_lidar_src/livox_stream"
+printf '%s\n' "$sdk_library" > "$HOME/.cam_lidar_src/livox_sdk_library.path"
 echo "[OK] Architecture: $architecture"
 echo "[OK] Livox SDK2 library: $sdk_library"
-rm -rf "$HOME/.cam_lidar_src/livox_discovery"
-mkdir -p "$HOME/.cam_lidar_src" "$HOME/.cam_lidar/bin"
-printf '%s\n' "$sdk_library" > "$HOME/.cam_lidar_src/livox_sdk_library.path"
 REMOTE_PREFLIGHT
 
-echo "[2/4] Copying helper source to $TARGET"
+echo "[2/4] Copying stream helper source to $TARGET"
 scp -r "$SOURCE" "$TARGET:~/$REMOTE_SOURCE_ROOT/"
 
-echo "[3/4] Configuring and building helper natively on Jetson"
+echo "[3/4] Configuring and building stream helper natively on Jetson"
 ssh "$TARGET" 'bash -s' <<'REMOTE_BUILD'
 set -euo pipefail
 
-source_dir="$HOME/.cam_lidar_src/livox_discovery"
+source_dir="$HOME/.cam_lidar_src/livox_stream"
 build_dir="$source_dir/build"
-binary="$build_dir/livox_discover"
-destination="$HOME/.cam_lidar/bin/livox_discover"
+binary="$build_dir/livox_stream"
+destination="$HOME/.cam_lidar/bin/livox_stream"
 temporary_destination="$destination.tmp.$$"
 sdk_library="$(cat "$HOME/.cam_lidar_src/livox_sdk_library.path")"
-
 trap 'rm -f "$temporary_destination"' EXIT
-
-if [[ ! -r "$sdk_library" ]]; then
-    echo "[ERROR] Livox SDK2 library disappeared before build: $sdk_library" >&2
-    exit 1
-fi
 
 cmake -S "$source_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -107,20 +94,17 @@ cmake -S "$source_dir" -B "$build_dir" \
 cmake --build "$build_dir" --parallel "$(nproc)"
 
 if [[ ! -s "$binary" || ! -x "$binary" ]]; then
-    echo "[ERROR] Build completed without an executable binary: $binary" >&2
+    echo "[ERROR] Build did not produce an executable: $binary" >&2
     exit 1
 fi
 if ! readelf -h "$binary" | grep -E 'Machine:[[:space:]]+AArch64' >/dev/null; then
-    echo "[ERROR] Built helper is not an AArch64 executable." >&2
-    readelf -h "$binary" >&2 || true
+    echo "[ERROR] Built stream helper is not AArch64." >&2
     exit 1
 fi
-if command -v ldd >/dev/null 2>&1; then
-    if ldd "$binary" 2>&1 | grep 'not found' >/dev/null; then
-        echo "[ERROR] Helper has unresolved shared-library dependencies:" >&2
-        ldd "$binary" >&2 || true
-        exit 1
-    fi
+if ldd "$binary" 2>&1 | grep 'not found' >/dev/null; then
+    echo "[ERROR] Stream helper has unresolved libraries:" >&2
+    ldd "$binary" >&2 || true
+    exit 1
 fi
 
 cp "$binary" "$temporary_destination"
@@ -128,13 +112,9 @@ chmod +x "$temporary_destination"
 "$temporary_destination" --version
 mv -f "$temporary_destination" "$destination"
 trap - EXIT
-
-if [[ ! -x "$destination" ]]; then
-    echo "[ERROR] Installed helper is not executable: $destination" >&2
-    exit 1
-fi
 REMOTE_BUILD
 
-echo "[4/4] Verifying installed helper"
-ssh "$TARGET" '"$HOME/.cam_lidar/bin/livox_discover" --version'
-echo "[OK] Livox helper installed at ~/.cam_lidar/bin/livox_discover"
+echo "[4/4] Verifying installed stream helper"
+ssh "$TARGET" 'test -x "$HOME/.cam_lidar/bin/livox_stream"'
+ssh "$TARGET" '"$HOME/.cam_lidar/bin/livox_stream" --version'
+echo "[OK] Livox stream helper installed at ~/.cam_lidar/bin/livox_stream"

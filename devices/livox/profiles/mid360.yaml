@@ -1,0 +1,71 @@
+profile_id: livox_mid360_family
+
+models:
+  MID360:
+    display_name: MID-360
+    sdk_profile: mid360
+  MID360S:
+    display_name: MID-360S
+    sdk_profile: mid360s
+
+sdk:
+  config_key: MID360
+  master_sdk: true
+  lidar_log_enable: false
+  multicast_ip: 224.1.1.5
+
+jetson:
+  interface: enxec9a0c19f45f
+  ip: 192.168.1.5
+  prefix: 24
+
+lidar:
+  ip: 192.168.1.162
+  expected_serial: ARMCP4D0032262
+  strict_serial_verification: false
+  ip_access: read_only
+
+udp:
+  discovery: 56000
+  lidar:
+    command: 56100
+    push: 56200
+    point_cloud: 56300
+    imu: 56400
+    log: 56500
+  host:
+    command: 56101
+    push: 56201
+    point_cloud: 56301
+    imu: 56401
+    log: 56501
+
+testing:
+  sample_window_sec: 3
+  stream_start_timeout_sec: 15
+  continuous_operation:
+    mode: development
+    development_duration_sec: 10
+    qualification_duration_sec: 14400
+    min_point_packet_rate: 1
+    min_point_rate: 1
+    min_imu_rate: 1
+  thresholds:
+    MID360:
+      imu_rate_hz:
+        target: 200
+        tolerance_percent: null
+      point_rate_pts_s:
+        target: 200000
+        tolerance_percent: null
+      packet_loss:
+        max_percent: null
+    MID360S:
+      imu_rate_hz:
+        target: 200
+        tolerance_percent: null
+      point_rate_pts_s:
+        target: 200000
+        tolerance_percent: null
+      packet_loss:
+        max_percent: null

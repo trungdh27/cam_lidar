@@ -25,6 +25,7 @@ from core.remote.ssh_manager import SSHConfig
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
+from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import (
     JetsonConnectionStatus,
     JetsonState,
@@ -131,12 +132,14 @@ class DashboardPage(QWidget):
         self,
         jetson_state: JetsonState,
         jetson_service: JetsonConnectionService,
+        device_registry: DeviceRegistry,
         parent=None,
     ):
         super().__init__(parent)
 
         self.jetson_state = jetson_state
         self.jetson_service = jetson_service
+        self.device_registry = device_registry
         self.metric_cards = {}
         self._device_data = {}
         self._test_summary = None
@@ -149,6 +152,8 @@ class DashboardPage(QWidget):
         self._build_ui()
         self._connect_jetson_signals()
         self.reset_view()
+        self.device_registry.devices_changed.connect(self.set_device_data)
+        self.set_device_data(self.device_registry.devices())
         self._render_jetson_state()
 
     def _build_ui(self):

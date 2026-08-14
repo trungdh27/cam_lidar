@@ -10,6 +10,14 @@ class InterfaceRole(str, Enum):
     IGNORED = "IGNORED"
 
 
+class NetworkVerificationStatus(str, Enum):
+    NETWORK_READY = "NETWORK_READY"
+    INTERFACE_NOT_FOUND = "INTERFACE_NOT_FOUND"
+    LINK_DOWN = "LINK_DOWN"
+    JETSON_IP_MISMATCH = "JETSON_IP_MISMATCH"
+    SUBNET_MISMATCH = "SUBNET_MISMATCH"
+
+
 @dataclass
 class NetworkInterface:
     name: str
@@ -75,6 +83,73 @@ class NetworkSnapshot:
             "management": self.management.to_dict(),
             "interfaces": [item.to_dict() for item in self.interfaces],
             "lidar_candidate": self.lidar_candidate,
+        }
+
+
+@dataclass(frozen=True)
+class NetworkVerificationResult:
+    ready: bool
+    status: NetworkVerificationStatus
+    interface: str
+    mac_address: Optional[str]
+    operstate: str
+    carrier: Optional[bool]
+    physical: bool
+    flags: list[str]
+    ipv4_addresses: list[str]
+    expected_jetson_cidr: str
+    expected_lidar_ip: str
+    expected_network: str
+    reason: str
+
+    def to_dict(self) -> dict:
+        return {
+            "ready": self.ready,
+            "status": self.status.value,
+            "interface": self.interface,
+            "mac_address": self.mac_address,
+            "operstate": self.operstate,
+            "carrier": self.carrier,
+            "physical": self.physical,
+            "flags": list(self.flags),
+            "ipv4_addresses": list(self.ipv4_addresses),
+            "expected_jetson_cidr": self.expected_jetson_cidr,
+            "expected_lidar_ip": self.expected_lidar_ip,
+            "expected_network": self.expected_network,
+            "gateway": None,
+            "gateway_required": False,
+            "default_route_required": False,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class PingResult:
+    reachable: bool
+    target_ip: str
+    interface: str
+    transmitted: Optional[int]
+    received: Optional[int]
+    packet_loss_percent: Optional[float]
+    average_rtt_ms: Optional[float]
+    command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    def to_dict(self) -> dict:
+        return {
+            "reachable": self.reachable,
+            "target_ip": self.target_ip,
+            "interface": self.interface,
+            "transmitted": self.transmitted,
+            "received": self.received,
+            "packet_loss_percent": self.packet_loss_percent,
+            "average_rtt_ms": self.average_rtt_ms,
+            "command": self.command,
+            "exit_code": self.exit_code,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
         }
 
 
