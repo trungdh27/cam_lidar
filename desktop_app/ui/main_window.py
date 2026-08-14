@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import QTimer
 
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
             self.jetson_state,
             self,
         )
+        self._shutdown_after_camera_stop = False
         self._build_ui()
 
     def _build_ui(self):
@@ -139,6 +141,7 @@ class MainWindow(QMainWindow):
                     self.jetson_state,
                     self.jetson_service,
                 )
+                self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
             elif index == 3:
                 self.lidar_page = LidarPage(
@@ -173,5 +176,26 @@ class MainWindow(QMainWindow):
         self.dashboard_page.updated_label.setText("Updated just now")
 
     def closeEvent(self, event):
+        if (
+            hasattr(self, "camera_page")
+            and (
+                self.camera_page.connection_state.value == "STREAMING"
+                or (
+                    self.camera_page.test_runner_worker is not None
+                    and self.camera_page.test_runner_worker.isRunning()
+                )
+            )
+            and not self._shutdown_after_camera_stop
+        ):
+            event.ignore()
+            self.camera_page.shutdown_stream()
+            QTimer.singleShot(17000, self._finish_close)
+            return
         self.jetson_service.shutdown()
         super().closeEvent(event)
+
+    def _finish_close(self):
+        if self._shutdown_after_camera_stop:
+            return
+        self._shutdown_after_camera_stop = True
+        self.close()
