@@ -27,6 +27,17 @@ def zed_model_family(value: object) -> str:
     return "unknown_zed"
 
 
+def canonical_zed_model(value: object) -> str:
+    family = zed_model_family(value)
+    return {
+        "zed_x_one_4k": "ZED X One 4K",
+        "zed_x_one_gs": "ZED X One GS",
+        "zed_x_one": "ZED X One",
+        "zed_x_mini": "ZED X Mini",
+        "zed_x": "ZED X",
+    }.get(family, str(value).strip() or "Unknown ZED")
+
+
 def is_camera_one_profile(profile_id: str) -> bool:
     return profile_id in ZED_MONO_PROFILES
 

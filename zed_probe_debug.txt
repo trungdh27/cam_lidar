@@ -90,51 +90,21 @@ def explorer_devices(sdk_version):
         return [], "ZED_Explorer fallback failed: " + str(exc)
     output = result.stdout + "\n" + result.stderr
     devices = []
-    current = None
-
-    def clean_explorer_value(raw_value):
-        cleaned = raw_value.strip()
-        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ("\"", "'"):
-            cleaned = cleaned[1:-1].strip()
-        return cleaned
-
-    field_names = {
-        "model": "model",
-        "camera model": "model",
-        "s/n": "serial_number",
-        "sn": "serial_number",
-        "serial": "serial_number",
-        "serial number": "serial_number",
-        "state": "state",
-        "path": "device_path",
-        "id": "camera_id",
-        "camera id": "camera_id",
-        "port": "port",
-        "type": "interface",
-        "interface": "interface",
-    }
+    current = {}
     for raw_line in output.splitlines():
         line = raw_line.strip()
-        if re.match(r"^##\s*Cam\s+\d+\s*##$", line, re.I):
-            if current:
-                devices.append(current)
+        model_match = re.search(r"(?:camera\s+model|model)\s*[:=]\s*(.+)", line, re.I)
+        serial_match = re.search(r"(?:serial(?:\s+number)?|sn)\s*[:=]\s*(\d+)", line, re.I)
+        id_match = re.search(r"camera\s+id\s*[:=]\s*([^\s]+)", line, re.I)
+        state_match = re.search(r"state\s*[:=]\s*(.+)", line, re.I)
+        if model_match and current.get("model"):
+            devices.append(current)
             current = {}
-            continue
-        if current is None:
-            continue
-        if re.match(r"^\*+$", line):
-            if current:
-                devices.append(current)
-            current = None
-            continue
-        field_match = re.match(r"^([^:=]+?)\s*[:=]\s*(.*?)\s*$", line)
-        if not field_match:
-            continue
-        key = " ".join(field_match.group(1).strip().lower().split())
-        field = field_names.get(key)
-        if field:
-            current[field] = clean_explorer_value(field_match.group(2))
-    if current:
+        if model_match: current["model"] = model_match.group(1).strip()
+        if serial_match: current["serial_number"] = serial_match.group(1)
+        if id_match: current["camera_id"] = id_match.group(1)
+        if state_match: current["state"] = state_match.group(1).strip()
+    if current.get("model") or current.get("serial_number"):
         devices.append(current)
     normalized = []
     for item in devices:
@@ -143,8 +113,7 @@ def explorer_devices(sdk_version):
             "model": model, "raw_model": model, "normalized_model": normalize_model(model),
             "model_family": model_family(model), "serial_number": item.get("serial_number", "-"),
             "camera_id": item.get("camera_id", "-"), "state": item.get("state", "-"),
-            "firmware": "-", "interface": item.get("interface", "-"),
-            "device_path": item.get("device_path", "-"), "port": item.get("port", "-"),
+            "firmware": "-", "interface": "GMSL2", "device_path": "-",
             "sdk_driver": "ZED SDK " + sdk_version, "api": "ZED_Explorer --all",
         })
     return normalized, None
@@ -155,111 +124,22 @@ def deduplicate_devices(devices):
         "unknown_zed": 0, "zed_x": 1, "zed_x_one": 2,
         "zed_x_mini": 3, "zed_x_one_gs": 3, "zed_x_one_4k": 3,
     }
-    missing_values = {"", "-", "none", "unknown", "n/a"}
-
-    def clean_identity_value(value):
-        text = str(value or "").strip()
-        return "" if text.casefold() in missing_values else text
-
-    def serial_of(item):
-        return clean_identity_value(item.get("serial_number") or item.get("serial"))
-
-    def record_family(item):
-        family = clean_identity_value(item.get("model_family"))
-        return family or model_family(item.get("model", "Unknown ZED"))
-
-    def physical_match(first, second):
-        locator_fields = ("device_path", "camera_id", "port")
-        shared = []
-        for field in locator_fields:
-            first_value = clean_identity_value(first.get(field))
-            second_value = clean_identity_value(second.get(field))
-            if first_value and second_value:
-                if first_value != second_value:
-                    return False
-                shared.append(field)
-        first_transport = clean_identity_value(first.get("interface")).upper()
-        second_transport = clean_identity_value(second.get("interface")).upper()
-        if first_transport and second_transport and first_transport != second_transport:
-            if not (first_transport.startswith("GMSL") and second_transport.startswith("GMSL")):
-                return False
-        return bool(shared)
-
-    def merge_records(current, incoming):
-        current_family = record_family(current)
-        incoming_family = record_family(incoming)
-        current_rank = specificity.get(current_family, 0)
-        incoming_rank = specificity.get(incoming_family, 0)
-        merged = dict(current)
-        for key, value in incoming.items():
-            if not clean_identity_value(merged.get(key)) and clean_identity_value(value):
-                merged[key] = value
-
-        preferred = incoming if incoming_rank > current_rank else current
-        preferred_family = incoming_family if incoming_rank > current_rank else current_family
-        preferred_model = clean_identity_value(preferred.get("model"))
-        if preferred_model:
-            merged["model"] = preferred_model
-            merged["raw_model"] = clean_identity_value(preferred.get("raw_model")) or preferred_model
-            merged["normalized_model"] = (
-                clean_identity_value(preferred.get("normalized_model"))
-                or normalize_model(preferred_model)
-            )
-            merged["model_family"] = preferred_family
-
-        serial = serial_of(current) or serial_of(incoming)
-        if serial:
-            merged["serial_number"] = serial
-
-        # Explorer reports the physical connection fields more precisely than
-        # the SDK device-list APIs, so retain those values during reconciliation.
-        explorer = next(
-            (
-                item for item in (incoming, current)
-                if "ZED_Explorer" in str(item.get("api", ""))
-            ),
-            None,
+    by_identity = {}
+    for item in devices:
+        serial = str(item.get("serial_number") or "-")
+        identity = serial if serial != "-" else (
+            str(item.get("model")), str(item.get("device_path")),
+            str(item.get("camera_id")),
         )
-        if explorer is not None:
-            for key in ("camera_id", "state", "interface", "device_path", "port"):
-                if clean_identity_value(explorer.get(key)):
-                    merged[key] = explorer[key]
-
-        sources = []
-        for item in (current, incoming):
-            for source in str(item.get("api") or "").split(" + "):
-                if source and source not in sources:
-                    sources.append(source)
-        if sources:
-            merged["api"] = " + ".join(sources)
-        return merged
-
-    # Reconcile serial-bearing observations first. This lets a later no-serial
-    # fallback attach only when its physical locators select one unique camera.
-    ordered = sorted(devices, key=lambda item: not bool(serial_of(item)))
-    reconciled = []
-    for item in ordered:
-        incoming = dict(item)
-        serial = serial_of(incoming)
-        serial_matches = [
-            index for index, current in enumerate(reconciled)
-            if serial and serial_of(current) == serial
-        ]
-        if serial_matches:
-            index = serial_matches[0]
-            reconciled[index] = merge_records(reconciled[index], incoming)
+        current = by_identity.get(identity)
+        if current is None:
+            by_identity[identity] = item
             continue
-
-        physical_matches = [
-            index for index, current in enumerate(reconciled)
-            if not (serial and serial_of(current)) and physical_match(current, incoming)
-        ]
-        if len(physical_matches) == 1:
-            index = physical_matches[0]
-            reconciled[index] = merge_records(reconciled[index], incoming)
-        else:
-            reconciled.append(incoming)
-    return reconciled
+        current_family = str(current.get("model_family", "unknown_zed"))
+        incoming_family = str(item.get("model_family", "unknown_zed"))
+        if specificity.get(incoming_family, 0) > specificity.get(current_family, 0):
+            by_identity[identity] = item
+    return list(by_identity.values())
 
 
 def all_zed_devices(sl, sdk_version):

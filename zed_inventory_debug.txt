@@ -1,3 +1,4 @@
+===== REMOTE ZED ADAPTER =====
 import asyncio
 import json
 import shlex
@@ -238,14 +239,246 @@ class RemoteZedAdapter(BaseCameraAdapter):
             )
         try:
             fps = int(payload.get("fps"))
-        except (TypeError, ValueError) as exc:
-            raise CameraOpenError(f"Unsupported FPS: {payload.get('fps')}") from exc
-        if fps not in stream.fps:
-            raise CameraOpenError(
-                f"Unsupported configuration: {stream.display_name} @ {fps} FPS. "
-                f"Allowed FPS: {list(stream.fps)}"
-            )
+===== INVENTORY =====
+            by_uid[device.device_uid] = device
+    return tuple(sorted(
+        by_uid.values(),
+        key=lambda item: (item.vendor.casefold(), item.model.casefold(), item.serial),
+    ))
 
-    @staticmethod
-    def _matches_profile(device, profile_id):
-        return model_matches_profile(device.get("model", ""), profile_id)
+
+class CameraInventory:
+    """Single Qt-free source of truth for currently detected physical cameras."""
+
+    def __init__(self, adapters=None, ros_registry=None, driver_probe=None):
+        self.adapters = tuple(adapters or (
+            ZedCameraDiscoveryAdapter(), RealSenseCameraDiscoveryAdapter()
+        ))
+        self.ros_registry = ros_registry or RosCameraDriverRegistry()
+        self.driver_probe = driver_probe or RosDriverPackageProbe()
+        self._devices: tuple[CameraDevice, ...] = ()
+        self._snapshot = CameraInventorySnapshot((), {}, {}, "")
+
+    async def discover_all(self, ssh) -> CameraInventorySnapshot:
+        devices = []
+        errors = {}
+        warnings = {}
+        for adapter in self.adapters:
+            name = getattr(adapter, "name", type(adapter).__name__)
+            try:
+                result = await adapter.discover(ssh)
+                devices.extend(result.devices)
+                if result.warnings:
+                    warnings[name] = tuple(result.warnings)
+            except Exception as exc:
+                errors[name] = f"{type(exc).__name__}: {exc}"
+
+        devices = list(deduplicate_camera_devices(devices))
+        availability = {}
+        ros2_available = None
+        try:
+            availability, ros2_available = await self.driver_probe.probe(
+                ssh, self.ros_registry.packages()
+            )
+        except Exception as exc:
+            warnings["ros_packages"] = (
+                f"ROS driver readiness unavailable: {type(exc).__name__}: {exc}",
+            )
+        mapped = tuple(
+            self.ros_registry.map_device(device, availability)
+            for device in devices
+        )
+        snapshot = CameraInventorySnapshot(
+            devices=mapped,
+            adapter_errors=errors,
+            adapter_warnings=warnings,
+            discovered_at=datetime.now(timezone.utc).isoformat(),
+            ros2_available=ros2_available,
+        )
+        self._devices = mapped
+        self._snapshot = snapshot
+        return snapshot
+
+    async def refresh(self, ssh) -> CameraInventorySnapshot:
+        return await self.discover_all(ssh)
+
+    def get_devices(self) -> tuple[CameraDevice, ...]:
+        return self._devices
+
+    def get_device(self, device_uid: str) -> CameraDevice | None:
+        return next(
+            (item for item in self._devices if item.device_uid == device_uid), None
+        )
+
+    def get_by_vendor(self, vendor: str) -> tuple[CameraDevice, ...]:
+        target = vendor.casefold()
+        return tuple(item for item in self._devices if item.vendor.casefold() == target)
+
+    def get_by_serial(self, serial: object) -> tuple[CameraDevice, ...]:
+        target = str(serial)
+        return tuple(item for item in self._devices if item.serial == target)
+
+    def clear_stale_inventory(self) -> None:
+        self._devices = ()
+        self._snapshot = CameraInventorySnapshot((), {}, {}, "")
+
+    @property
+    def snapshot(self) -> CameraInventorySnapshot:
+        return self._snapshot
+
+
+class CameraTargetSelection:
+    """Stable UID selection state for future data-driven ROS tests."""
+
+    ALL_CAMERAS = None
+
+    def __init__(self):
+        self.selected_device_uid: str | None = self.ALL_CAMERAS
+
+    def select(self, device_uid: str | None) -> None:
+        self.selected_device_uid = device_uid or self.ALL_CAMERAS
+
+    def retain_after_refresh(self, devices) -> str | None:
+        uids = {item.device_uid for item in devices}
+        if self.selected_device_uid is not None and self.selected_device_uid not in uids:
+===== ZED MODELS =====
+import re
+
+
+ZED_MONO_PROFILES = frozenset({"zed_x_one_4k", "zed_x_one_gs"})
+
+
+def normalize_zed_model(value: object) -> str:
+    text = getattr(value, "name", None) or str(value)
+    text = text.upper()
+    text = text.replace("CAMERA_MODEL.", "").replace("CAMERA_MODEL_ONE.", "")
+    return " ".join(re.findall(r"[A-Z]+|\d+", text))
+
+
+def zed_model_family(value: object) -> str:
+    normalized = normalize_zed_model(value)
+    compact = normalized.replace(" ", "")
+    if "XONE" in compact:
+        if any(token in compact for token in ("GS", "GLOBALSHUTTER")):
+            return "zed_x_one_gs"
+        if any(token in compact for token in ("UHD", "4K")):
+            return "zed_x_one_4k"
+        return "zed_x_one"
+    if "XMINI" in compact or "ZEDMINI" in compact:
+        return "zed_x_mini"
+    if "ZEDX" in compact:
+        return "zed_x"
+    return "unknown_zed"
+
+
+def canonical_zed_model(value: object) -> str:
+    family = zed_model_family(value)
+    return {
+        "zed_x_one_4k": "ZED X One 4K",
+        "zed_x_one_gs": "ZED X One GS",
+        "zed_x_one": "ZED X One",
+        "zed_x_mini": "ZED X Mini",
+        "zed_x": "ZED X",
+    }.get(family, str(value).strip() or "Unknown ZED")
+
+
+def is_camera_one_profile(profile_id: str) -> bool:
+    return profile_id in ZED_MONO_PROFILES
+
+
+def model_matches_profile(value: object, profile_id: str) -> bool:
+    family = zed_model_family(value)
+    if profile_id == "zed_x_one_4k":
+        return family in ("zed_x_one_4k", "zed_x_one")
+    if profile_id == "zed_x_one_gs":
+        return family in ("zed_x_one_gs", "zed_x_one")
+    return family == profile_id
+===== ROS REGISTRY =====
+from dataclasses import dataclass, replace
+
+from devices.camera.models import (
+    CameraDevice,
+    CameraRosReadiness,
+    make_ros_namespace_hint,
+)
+
+
+@dataclass(frozen=True)
+class RosCameraDriverMetadata:
+    vendor: str
+    normalized_model: str
+    driver_package: str
+    ros_camera_model: str
+
+
+class RosCameraDriverRegistry:
+    """Phase 8.3-0 metadata only; it never launches or manages ROS nodes."""
+
+    def __init__(self):
+        entries = (
+            RosCameraDriverMetadata(
+                "Stereolabs", "zed_x_mini", "zed_wrapper", "zedxm"
+            ),
+            RosCameraDriverMetadata(
+                "Stereolabs", "zed_x_one_4k", "zed_wrapper", "zedxone4k"
+            ),
+            RosCameraDriverMetadata(
+                "Intel RealSense", "d435i", "realsense2_camera", "d435i"
+            ),
+        )
+        self._entries = {
+            (entry.vendor.casefold(), entry.normalized_model): entry
+            for entry in entries
+        }
+
+    def resolve(self, device: CameraDevice) -> RosCameraDriverMetadata | None:
+        return self._entries.get(
+            (device.vendor.casefold(), device.normalized_model)
+        )
+
+    def expected_driver(self, device: CameraDevice) -> str | None:
+        entry = self.resolve(device)
+        if entry:
+            return entry.driver_package
+        if device.vendor.casefold() == "stereolabs":
+            return "zed_wrapper"
+        if device.vendor.casefold() == "intel realsense":
+            return "realsense2_camera"
+        return None
+
+    def packages(self) -> tuple[str, ...]:
+        return tuple(sorted({item.driver_package for item in self._entries.values()}))
+
+    def map_device(
+        self,
+        device: CameraDevice,
+        package_availability: dict[str, bool | None] | None = None,
+    ) -> CameraDevice:
+        entry = self.resolve(device)
+        expected = self.expected_driver(device)
+        if entry is None:
+            readiness = (
+                CameraRosReadiness.UNSUPPORTED_MODEL
+                if expected else CameraRosReadiness.UNKNOWN
+            )
+            model_token = device.normalized_model
+            ros_model = None
+        else:
+            installed = (package_availability or {}).get(entry.driver_package)
+            readiness = (
+                CameraRosReadiness.READY if installed is True else
+                CameraRosReadiness.DRIVER_MISSING if installed is False else
+                CameraRosReadiness.UNKNOWN
+            )
+            model_token = entry.ros_camera_model
+            ros_model = entry.ros_camera_model
+        namespace = make_ros_namespace_hint(
+            model_token, device.serial, device_uid=device.device_uid
+        )
+        return replace(
+            device,
+            ros_driver=expected,
+            ros_camera_model=ros_model,
+            ros_namespace_hint=namespace,
+            ros_readiness=readiness,
+        )

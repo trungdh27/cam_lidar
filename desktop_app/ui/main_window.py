@@ -14,6 +14,7 @@ from PySide6.QtCore import QTimer
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
+from desktop_app.services.camera_inventory_service import CameraInventoryService
 from desktop_app.services.lidar_discovery_service import (
     LidarDiscoveryService,
 )
@@ -73,6 +74,9 @@ class MainWindow(QMainWindow):
         self.jetson_service = JetsonConnectionService(
             self.jetson_state,
             self,
+        )
+        self.camera_inventory_service = CameraInventoryService(
+            self.jetson_service, parent=self
         )
         self.livox_network_profile = load_default_livox_profile()
         self.lidar_runtime_state = LidarRuntimeState(self)
@@ -171,6 +175,7 @@ class MainWindow(QMainWindow):
                 self.camera_page = CameraPage(
                     self.jetson_state,
                     self.jetson_service,
+                    camera_inventory_service=self.camera_inventory_service,
                 )
                 self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
@@ -224,6 +229,10 @@ class MainWindow(QMainWindow):
                 or (
                     self.camera_page.test_runner_worker is not None
                     and self.camera_page.test_runner_worker.isRunning()
+                )
+                or (
+                    self.camera_page.ros_test_runner_worker is not None
+                    and self.camera_page.ros_test_runner_worker.isRunning()
                 )
             )
             and not self._shutdown_after_camera_stop
