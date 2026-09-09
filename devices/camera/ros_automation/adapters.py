@@ -24,6 +24,46 @@ class RosCameraAdapter(ABC):
     def primary_image_topic(self, device: CameraDevice) -> str:
         return self.build_launch_spec(device).primary_image_topic
 
+    def camera_info_requirement(self, device: CameraDevice) -> RosTopicRequirement:
+        requirements = self.build_launch_spec(device).mandatory_topics
+        return next(item for item in requirements if item.capability == "camera_info")
+
+    def primary_image_requirement(self, device: CameraDevice) -> RosTopicRequirement:
+        spec = self.build_launch_spec(device)
+        return next(
+            item for item in spec.mandatory_topics
+            if item.topic(spec.namespace) == spec.primary_image_topic
+        )
+
+    def sensor_topics(self, _device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
+        return ()
+
+    def qos_topics(self, device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
+        topics = [self.primary_image_requirement(device), self.camera_info_requirement(device)]
+        sensor = next(
+            (item for item in self.sensor_topics(device) if item.availability == "MANDATORY"),
+            None,
+        )
+        if sensor is not None:
+            topics.append(sensor)
+        return tuple(topics)
+
+    def bag_topics(self, device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
+        return self.qos_topics(device)
+
+    def frame_relationship_valid(self, image_frame: str, camera_info_frame: str) -> bool:
+        def normalized(value):
+            tokens = [
+                token for token in str(value or "").strip("/").lower().split("_")
+                if token not in {"frame", "optical", "link"}
+            ]
+            return tuple(tokens)
+
+        if not image_frame or not camera_info_frame:
+            return False
+        left, right = normalized(image_frame), normalized(camera_info_frame)
+        return left == right
+
 
 def _namespace(device: CameraDevice) -> str:
     return device.ros_namespace_hint or make_ros_namespace_hint(
@@ -136,6 +176,35 @@ class ZedRosAdapter(RosCameraAdapter):
             primary_image_topic=primary,
         )
 
+    def sensor_topics(self, device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
+        if device.ros_camera_model == "zedxm":
+            return (
+                RosTopicRequirement(
+                    "imu/data", "sensor_msgs/msg/Imu", "imu",
+                    availability="MANDATORY", alternatives=("imu/data_raw",),
+                ),
+                RosTopicRequirement(
+                    "temperature/imu", "sensor_msgs/msg/Temperature", "temperature",
+                    availability="OPTIONAL",
+                    alternatives=("temperature/left", "temperature/right"),
+                ),
+                RosTopicRequirement(
+                    "imu/mag", "sensor_msgs/msg/MagneticField", "magnetic_field",
+                    availability="OPTIONAL", alternatives=("mag",),
+                ),
+            )
+        return (
+            RosTopicRequirement(
+                "imu/data", "sensor_msgs/msg/Imu", "imu",
+                availability="OPTIONAL", alternatives=("imu/data_raw",),
+            ),
+            RosTopicRequirement(
+                "temperature/imu", "sensor_msgs/msg/Temperature", "temperature",
+                availability="OPTIONAL",
+                alternatives=("temperature/left", "temperature/right"),
+            ),
+        )
+
 
 class RealSenseRosAdapter(RosCameraAdapter):
     driver = "realsense2_camera"
@@ -202,6 +271,9 @@ class RealSenseRosAdapter(RosCameraAdapter):
             f"camera_namespace:={launch_namespace}",
             "enable_color:=true",
             "enable_depth:=true",
+            "enable_gyro:=true",
+            "enable_accel:=true",
+            "unite_imu_method:=2",
             f"rgb_camera.color_profile:={profile.configuration['color_profile']}",
         )
         return RosLaunchSpec(
@@ -217,4 +289,17 @@ class RealSenseRosAdapter(RosCameraAdapter):
             requested_profile=profile,
             mandatory_topics=requirements,
             primary_image_topic=requirements[0].topic(namespace),
+        )
+
+    def sensor_topics(self, _device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
+        return (
+            RosTopicRequirement(
+                "imu", "sensor_msgs/msg/Imu", "imu", availability="MANDATORY",
+                alternatives=("gyro/sample", "accel/sample"),
+            ),
+            RosTopicRequirement(
+                "temperature", "sensor_msgs/msg/Temperature", "temperature",
+                availability="OPTIONAL",
+                alternatives=("temperature/imu", "temperature/gyro", "temperature/accel"),
+            ),
         )

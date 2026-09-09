@@ -39,5 +39,6 @@ def load_definitions(path, registry):
             automation_key=item["automation_key"], priority=item["priority"],
             timeout_s=float(item["timeout_s"]), parameters=item["parameters"],
             rules=tuple(item["rules"]),
+            evidence_metadata=dict(item.get("evidence") or {}),
         ))
     return definitions

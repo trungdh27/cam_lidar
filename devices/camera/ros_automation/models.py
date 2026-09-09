@@ -7,9 +7,25 @@ class RosTopicRequirement:
     message_type: str
     capability: str
     streaming: bool = True
+    availability: str = "MANDATORY"
+    alternatives: tuple[str, ...] = ()
+    expected_rate_hz: float | None = None
 
     def topic(self, namespace: str) -> str:
         return namespace.rstrip("/") + "/" + self.suffix.lstrip("/")
+
+    def candidate_topics(self, namespace: str) -> tuple[str, ...]:
+        return tuple(
+            namespace.rstrip("/") + "/" + suffix.lstrip("/")
+            for suffix in (self.suffix, *self.alternatives)
+        )
+
+    def to_dict(self, namespace: str | None = None) -> dict:
+        payload = asdict(self)
+        payload["alternatives"] = list(self.alternatives)
+        if namespace is not None:
+            payload["candidate_topics"] = list(self.candidate_topics(namespace))
+        return payload
 
 
 @dataclass(frozen=True)
@@ -103,4 +119,44 @@ class RosNodeSession:
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["setup_files"] = list(self.setup_files)
+        return payload
+
+
+@dataclass(frozen=True)
+class RosBagSession:
+    session_id: str
+    kind: str
+    owned_by_test: bool
+    pid: int | None = None
+    process_group: int | None = None
+    bag_path: str | None = None
+    log_path: str | None = None
+    started_at: str | None = None
+    setup_files: tuple[str, ...] = ()
+    topics: tuple[str, ...] = ()
+    remappings: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, payload: dict):
+        return cls(
+            session_id=str(payload.get("session_id") or ""),
+            kind=str(payload.get("kind") or "rosbag"),
+            owned_by_test=bool(payload.get("owned_by_test")),
+            pid=int(payload["pid"]) if payload.get("pid") is not None else None,
+            process_group=(
+                int(payload["process_group"])
+                if payload.get("process_group") is not None else None
+            ),
+            bag_path=payload.get("bag_path"),
+            log_path=payload.get("log_path"),
+            started_at=payload.get("started_at"),
+            setup_files=tuple(payload.get("setup_files") or ()),
+            topics=tuple(payload.get("topics") or ()),
+            remappings=dict(payload.get("remappings") or {}),
+        )
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["setup_files"] = list(self.setup_files)
+        payload["topics"] = list(self.topics)
         return payload

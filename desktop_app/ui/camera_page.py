@@ -167,9 +167,14 @@ class CameraPage(QWidget):
         except Exception as exc:
             self._test_definition_error = str(exc)
         try:
-            self.ros_test_definitions = load_definitions(
-                "testcases/camera/definitions/phase8_3a.json", self.test_registry
-            )
+            self.ros_test_definitions = []
+            for definition_path in (
+                "testcases/camera/definitions/phase8_3a.json",
+                "testcases/camera/definitions/phase8_3b.json",
+            ):
+                self.ros_test_definitions.extend(
+                    load_definitions(definition_path, self.test_registry)
+                )
         except Exception as exc:
             self._ros_test_definition_error = str(exc)
         self.stream_controller = CameraStreamController(
@@ -668,9 +673,10 @@ class CameraPage(QWidget):
         text.setReadOnly(True)
         sections = []
         for key in (
-            "status", "started_at", "finished_at", "duration_s",
+            "schema_version", "status", "started_at", "finished_at", "duration_s",
+            "device",
             "configuration", "measurements", "rule_results",
-            "failure_reasons", "error",
+            "sub_results", "failure_reasons", "error", "cleanup_errors",
         ):
             sections.append(
                 f"{key.replace('_', ' ').title()}\n"
@@ -2163,16 +2169,56 @@ class CameraPage(QWidget):
                 device_measurements = sub_result.get("measurements") or {}
                 prefix = f"SN{sub_result.get('serial', '-')}"
                 summary = []
-                for key in (
-                    "node_alive", "mandatory_topics_present",
-                    "mandatory_messages_received", "width", "height",
-                    "encoding", "calculated_fps", "cleanup_success",
-                ):
-                    if key in device_measurements:
-                        summary.append(
-                            f"{key.replace('_', ' ')}="
-                            f"{self._format_detail_value(device_measurements[key])}"
-                        )
+                if test_id == "ROS-005":
+                    image = device_measurements.get("image") or {}
+                    info = device_measurements.get("camera_info") or {}
+                    summary.extend((
+                        f"image={image.get('width')}x{image.get('height')}",
+                        f"CameraInfo={info.get('width')}x{info.get('height')}",
+                        f"distortion={info.get('distortion_model') or '--'}",
+                        f"fx/fy={device_measurements.get('fx')}/{device_measurements.get('fy')}",
+                        f"finite={device_measurements.get('finite_values')}",
+                        f"frame relationship={device_measurements.get('frame_relationship_valid')}",
+                    ))
+                elif test_id == "ROS-006":
+                    topics = device_measurements.get("sensor_topics") or []
+                    summary.append("sensors=" + ", ".join(
+                        f"{item.get('capability')}:{item.get('availability_status')}"
+                        f"@{item.get('measured_rate_hz', 0)}Hz"
+                        for item in topics
+                    ))
+                    summary.extend((
+                        f"temperature={device_measurements.get('temperature_availability')}",
+                        f"rollbacks={device_measurements.get('mandatory_timestamp_rollback_count')}",
+                        f"non-finite={device_measurements.get('mandatory_non_finite_value_count')}",
+                    ))
+                elif test_id == "ROS-007":
+                    summary.extend(
+                        f"{item.get('topic')}: compatible={item.get('compatible_result')}, "
+                        f"negative={item.get('negative_actual_result')}"
+                        for item in device_measurements.get("qos_matrix") or []
+                    )
+                elif test_id == "ROS-008":
+                    summary.extend((
+                        f"record duration={device_measurements.get('record_duration_s')}s",
+                        f"bag size={device_measurements.get('bag_size_bytes')} bytes",
+                        f"topics={len(device_measurements.get('recorded_topics') or [])}",
+                        f"metadata={device_measurements.get('metadata_valid')}",
+                        f"replay={device_measurements.get('mandatory_replay_messages_received')}",
+                        f"deserialize errors={device_measurements.get('deserialize_error_count')}",
+                    ))
+                else:
+                    for key in (
+                        "node_alive", "mandatory_topics_present",
+                        "mandatory_messages_received", "width", "height",
+                        "encoding", "calculated_fps", "cleanup_success",
+                    ):
+                        if key in device_measurements:
+                            summary.append(
+                                f"{key.replace('_', ' ')}="
+                                f"{self._format_detail_value(device_measurements[key])}"
+                            )
+                summary.append(f"status={sub_result.get('status', '--')}")
                 measurement_lines.append(
                     prefix + (": " + ", ".join(summary) if summary else "")
                 )
@@ -2765,7 +2811,7 @@ class CameraPage(QWidget):
         self.append_log("INFO", "Camera workspace ready. Select a profile to begin.")
         self._append_ros_log(
             "INFO",
-            "ROS Automation workspace ready. Discover cameras and run ROS-001 through ROS-004.",
+            "ROS Automation workspace ready. Discover cameras and run ROS-001 through ROS-008.",
         )
 
     def shutdown_stream(self):

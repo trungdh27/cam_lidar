@@ -28,6 +28,7 @@ class TestCaseDefinition:
     timeout_s: float
     parameters: dict[str, Any] = field(default_factory=dict)
     rules: tuple[dict[str, Any], ...] = ()
+    evidence_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

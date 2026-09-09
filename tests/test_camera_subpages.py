@@ -103,8 +103,8 @@ class CameraSubpageTests(unittest.TestCase):
         self.assertIsNone(self.page.target_camera_combo.currentData())
         self.assertGreaterEqual(self.page.test_table.minimumHeight(), 280)
 
-    def test_ros_automation_lists_phase_8_3a_tests_and_renders_details(self):
-        self.assertEqual(self.page.ros_test_table.rowCount(), 4)
+    def test_ros_automation_lists_phase_8_3a_and_8_3b_tests_and_renders_details(self):
+        self.assertEqual(self.page.ros_test_table.rowCount(), 8)
         self.assertEqual(
             [
                 self.page.ros_test_table.horizontalHeaderItem(column).text()
@@ -117,7 +117,7 @@ class CameraSubpageTests(unittest.TestCase):
                 self.page.ros_test_table.item(row, 1).text()
                 for row in range(self.page.ros_test_table.rowCount())
             ],
-            ["ROS-001", "ROS-002", "ROS-003", "ROS-004"],
+            ["ROS-001", "ROS-002", "ROS-003", "ROS-004", "ROS-005", "ROS-006", "ROS-007", "ROS-008"],
         )
         self.page._on_ros_test_row_clicked(3, 1)
         details = self.page.ros_test_detail_text.toPlainText()
@@ -232,6 +232,37 @@ class CameraSubpageTests(unittest.TestCase):
         self.assertEqual(self.page.ros_test_table.item(0, 5).text(), "PASS")
         self.assertIn("Latest Result: PASS", self.page.ros_test_detail_text.toPlainText())
         self.assertEqual(self.page.ros_pass_label.text(), "PASS 1")
+
+    def test_phase83b_result_detail_uses_compact_test_specific_summary(self):
+        self.page.ros_test_results["ROS-005"] = {
+            "status": "PASS",
+            "measurements": {"all_devices_pass": True, "selected_camera_count": 1},
+            "rule_results": [],
+            "sub_results": [{
+                "serial": "58651554",
+                "status": "PASS",
+                "measurements": {
+                    "image": {"width": 1920, "height": 1200},
+                    "camera_info": {
+                        "width": 1920, "height": 1200,
+                        "distortion_model": "plumb_bob",
+                        "K": list(range(9)),
+                    },
+                    "fx": 700.0,
+                    "fy": 701.0,
+                    "finite_values": True,
+                    "frame_relationship_valid": True,
+                },
+                "rule_results": [],
+            }],
+        }
+        self.page._set_ros_test_status("ROS-005", "PASS")
+        self.page._show_ros_test_details("ROS-005")
+        detail = self.page.ros_test_detail_text.toPlainText()
+        self.assertIn("image=1920x1200", detail)
+        self.assertIn("CameraInfo=1920x1200", detail)
+        self.assertIn("distortion=plumb_bob", detail)
+        self.assertNotIn("[0, 1, 2, 3", detail)
 
     def test_inventory_refresh_keeps_table_combo_and_details_consistent(self):
         registry = RosCameraDriverRegistry()

@@ -1,0 +1,85 @@
+[
+  {
+    "id": "ROS-005",
+    "name": "CameraInfo and Calibration Consistency",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.camera_info",
+    "priority": "P0",
+    "timeout_s": 60,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "warmup_s": 1,
+      "sample_count": 5,
+      "collection_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ],
+    "evidence": {"kind": "structured_ros_messages", "retain": ["result.json"]}
+  },
+  {
+    "id": "ROS-006",
+    "name": "IMU / Temperature / Sensor Publication",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.sensor_topics",
+    "priority": "P0",
+    "timeout_s": 65,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "warmup_s": 1,
+      "sample_count": 20,
+      "collection_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ],
+    "evidence": {"kind": "structured_sensor_samples", "retain": ["result.json"]}
+  },
+  {
+    "id": "ROS-007",
+    "name": "ROS2 QoS Compatibility",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.qos_matrix",
+    "priority": "P0",
+    "timeout_s": 70,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "graph_discovery_timeout_s": 5,
+      "sample_count": 3,
+      "subscriber_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ],
+    "evidence": {"kind": "structured_qos_matrix", "retain": ["result.json"]}
+  },
+  {
+    "id": "ROS-008",
+    "name": "Rosbag Record / Replay Integrity",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.bag_integrity",
+    "priority": "P0",
+    "timeout_s": 120,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "warmup_s": 1,
+      "topic_resolution_timeout_s": 8,
+      "record_startup_timeout_s": 8,
+      "record_duration_s": 15,
+      "record_shutdown_timeout_s": 8,
+      "metadata_timeout_s": 8,
+      "replay_startup_timeout_s": 8,
+      "replay_timeout_s": 12,
+      "replay_sample_count": 1,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ],
+    "evidence": {"kind": "rosbag2_record_replay", "retain": ["result.json", "remote_bag_reference"]}
+  }
+]

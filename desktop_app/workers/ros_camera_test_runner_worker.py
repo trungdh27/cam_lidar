@@ -12,7 +12,7 @@ from devices.camera.ros_automation.remote import RosRemoteProcessManager
 
 
 class RosCameraTestRunnerWorker(QThread):
-    """Runs Phase 8.3A through the existing generic TestRunner in a QThread."""
+    """Runs Phase 8.3A/B through the existing generic TestRunner in a QThread."""
 
     test_started = Signal(str)
     test_finished = Signal(str, str, object)

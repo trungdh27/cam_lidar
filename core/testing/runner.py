@@ -25,11 +25,30 @@ class TestRunner:
             result.rule_results = self.evaluator.evaluate(measurements, definition.rules)
             failed = [item for item in result.rule_results if not item["passed"]]
             result.failure_reasons = [f"{x['metric']}={x['actual']} {x['operator']} {x['expected']}" for x in failed]
-            result.status = TestStatus.FAIL if failed else TestStatus.PASS
+            aggregate_status = measurements.get("aggregate_status")
+            if failed and aggregate_status in {"BLOCKED", "ERROR"}:
+                result.status = TestStatus(aggregate_status)
+                blocked = next(
+                    (
+                        reason for item in sub_results
+                        if item.get("status") == aggregate_status
+                        for reason in item.get("failure_reasons") or ()
+                    ),
+                    None,
+                )
+                if blocked:
+                    result.error = {
+                        "code": blocked.get("code", "PREREQUISITE_BLOCKED"),
+                        "message": blocked.get("message", "Device execution was blocked."),
+                    }
+            else:
+                result.status = TestStatus.FAIL if failed else TestStatus.PASS
         except TestBlockedError as exc:
             result.status = TestStatus.BLOCKED; result.error = {"code": exc.code, "message": str(exc)}
         except TestCancelledError as exc:
             result.status = TestStatus.CANCELLED; result.error = {"code": exc.code, "message": str(exc)}
+            result.measurements = dict(getattr(handler, "partial_measurements", {}) or {})
+            result.configuration = dict(getattr(handler, "partial_configuration", {}) or {})
         except TestTimeoutError as exc:
             result.status = TestStatus.ERROR; result.error = {"code": exc.code, "message": str(exc)}
         except Exception as exc:
