@@ -1,0 +1,72 @@
+[
+  {
+    "id": "ROS-001",
+    "name": "ROS 2 Environment and Camera Driver Verification",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.environment",
+    "priority": "P0",
+    "timeout_s": 30,
+    "parameters": {
+      "expected_distro": "humble"
+    },
+    "rules": [
+      {"metric": "jetson_connected", "operator": "==", "expected": true},
+      {"metric": "ros2_available", "operator": "==", "expected": true},
+      {"metric": "ros_environment_loaded", "operator": "==", "expected": true},
+      {"metric": "ros_distro", "operator": "==", "expected": "humble"},
+      {"metric": "all_required_drivers_installed", "operator": "==", "expected": true},
+      {"metric": "fatal_environment_errors", "operator": "==", "expected": 0}
+    ]
+  },
+  {
+    "id": "ROS-002",
+    "name": "Camera ROS Node Launch and Physical Device Selection",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.node_launch",
+    "priority": "P0",
+    "timeout_s": 50,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ]
+  },
+  {
+    "id": "ROS-003",
+    "name": "ROS Node and Mandatory Topic Health Verification",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.topic_health",
+    "priority": "P0",
+    "timeout_s": 65,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "warmup_s": 1,
+      "topic_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ]
+  },
+  {
+    "id": "ROS-004",
+    "name": "ROS Image Resolution, FPS and Encoding Verification",
+    "group": "Robot Application / ROS2",
+    "automation_key": "ros.image_profile",
+    "priority": "P0",
+    "timeout_s": 75,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "warmup_s": 2,
+      "sample_count": 100,
+      "measurement_timeout_s": 10,
+      "fps_ratio_min": 0.95
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true}
+    ]
+  }
+]

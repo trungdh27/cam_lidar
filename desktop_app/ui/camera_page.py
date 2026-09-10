@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
+from desktop_app.services.camera_inventory_service import CameraInventoryService
 from desktop_app.controllers.camera_stream_controller import CameraStreamController
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.widgets import Card, StatusChip
@@ -38,6 +39,7 @@ from desktop_app.workers.gstreamer_preview_receiver import (
     GStreamerPreviewReceiver,
     inspect_host_gstreamer,
 )
+from devices.camera.inventory import CameraTargetSelection
 from devices.camera.models import CameraConnectionState
 from devices.camera.service import CameraService
 from devices.camera.preview_config import (
@@ -46,7 +48,11 @@ from devices.camera.preview_config import (
 from core.testing.definitions import load_definitions
 from core.testing.registry import TestRegistry
 from devices.camera.testing import register_camera_handlers
+from devices.camera.ros_automation import register_ros_camera_handlers
 from desktop_app.workers.camera_test_runner_worker import CameraTestRunnerWorker
+from desktop_app.workers.ros_camera_test_runner_worker import (
+    RosCameraTestRunnerWorker,
+)
 
 
 class CameraPreviewLabel(QLabel):
@@ -95,11 +101,17 @@ class CameraPage(QWidget):
         jetson_service: JetsonConnectionService,
         parent=None,
         camera_service=None,
+        camera_inventory_service=None,
     ):
         super().__init__(parent)
         self.jetson_state = jetson_state
         self.jetson_service = jetson_service
         self.camera_service = camera_service or CameraService()
+        self.camera_inventory_service = camera_inventory_service or CameraInventoryService(
+            self.jetson_service, parent=self
+        )
+        self.camera_target_selection = CameraTargetSelection()
+        self._selected_inventory_detail_uid = None
         self.connection_state = CameraConnectionState.DISCONNECTED
         self.camera_worker = None
         self.remote_request_id = None
@@ -125,17 +137,46 @@ class CameraPage(QWidget):
         self._preview_fallback_used = False
         self.test_registry = TestRegistry()
         register_camera_handlers(self.test_registry)
+        register_ros_camera_handlers(self.test_registry)
         self.test_definitions = []
         self.test_statuses = {}
         self.test_results = {}
         self.test_runner_worker = None
+        self.ros_test_definitions = []
+        self.ros_test_statuses = {}
+        self.ros_test_results = {}
+        self.ros_test_runner_worker = None
+        self._selected_ros_test_id = None
+        self._inventory_expanded = False
+        self._ros_log_entries = []
+        self._ros_environment_values = {
+            "ROS Distro": "NOT CHECKED",
+            "ROS Environment": "NOT CHECKED",
+            "zed_wrapper": "NOT CHECKED",
+            "realsense2_camera": "NOT CHECKED",
+            "Workspace": "NOT CHECKED",
+            "Last Check": "NEVER",
+        }
+        self._ros_environment_dialog = None
         self._test_definition_error = None
+        self._ros_test_definition_error = None
         try:
             self.test_definitions = load_definitions(
                 "testcases/camera/definitions/phase8_1a.json", self.test_registry
             )
         except Exception as exc:
             self._test_definition_error = str(exc)
+        try:
+            self.ros_test_definitions = []
+            for definition_path in (
+                "testcases/camera/definitions/phase8_3a.json",
+                "testcases/camera/definitions/phase8_3b.json",
+            ):
+                self.ros_test_definitions.extend(
+                    load_definitions(definition_path, self.test_registry)
+                )
+        except Exception as exc:
+            self._ros_test_definition_error = str(exc)
         self.stream_controller = CameraStreamController(
             self.jetson_service, self.camera_service, self
         )
@@ -143,6 +184,7 @@ class CameraPage(QWidget):
         self._build_ui()
         self._load_profiles()
         self._load_test_cases()
+        self._load_ros_test_cases()
         self._reset_runtime_ui()
         self.jetson_state.state_changed.connect(self._on_jetson_state_changed)
         self.jetson_service.operation_succeeded.connect(
@@ -150,6 +192,18 @@ class CameraPage(QWidget):
         )
         self.jetson_service.operation_failed.connect(
             self._on_remote_operation_failed
+        )
+        self.camera_inventory_service.started.connect(
+            self._on_inventory_discovery_started
+        )
+        self.camera_inventory_service.completed.connect(
+            self._on_inventory_discovery_completed
+        )
+        self.camera_inventory_service.failed.connect(
+            self._on_inventory_discovery_failed
+        )
+        self.camera_inventory_service.cleared.connect(
+            self._on_inventory_cleared
         )
         self.stream_controller.started.connect(self._on_stream_started)
         self.stream_controller.stopped.connect(self._on_stream_stopped)
@@ -165,7 +219,7 @@ class CameraPage(QWidget):
 
         header = QHBoxLayout()
         title_block = QVBoxLayout()
-        title = QLabel("Camera Tests")
+        title = QLabel("Camera")
         title.setObjectName("PageTitle")
         breadcrumb = QLabel("Devices  /  Camera")
         breadcrumb.setObjectName("Muted")
@@ -185,7 +239,12 @@ class CameraPage(QWidget):
         subnav = QHBoxLayout()
         self.monitor_tab_button = QPushButton("MONITOR")
         self.tests_tab_button = QPushButton("AUTOMATED TESTS")
-        for button in (self.monitor_tab_button, self.tests_tab_button):
+        self.ros_automation_tab_button = QPushButton("ROS AUTOMATION")
+        for button in (
+            self.monitor_tab_button,
+            self.tests_tab_button,
+            self.ros_automation_tab_button,
+        ):
             button.setObjectName("OutlineButton")
             button.setCheckable(True)
             button.setMinimumWidth(145)
@@ -196,11 +255,16 @@ class CameraPage(QWidget):
         self.camera_pages = QStackedWidget()
         self.monitor_page = self._build_monitor_page()
         self.automated_tests_page = self._build_automated_tests_page()
+        self.ros_automation_page = self._build_ros_automation_page()
         self.camera_pages.addWidget(self.monitor_page)
         self.camera_pages.addWidget(self.automated_tests_page)
+        self.camera_pages.addWidget(self.ros_automation_page)
         root.addWidget(self.camera_pages, 1)
         self.monitor_tab_button.clicked.connect(lambda: self._set_camera_subpage(0))
         self.tests_tab_button.clicked.connect(lambda: self._set_camera_subpage(1))
+        self.ros_automation_tab_button.clicked.connect(
+            lambda: self._set_camera_subpage(2)
+        )
         self._set_camera_subpage(0)
 
     def _build_monitor_page(self):
@@ -243,10 +307,698 @@ class CameraPage(QWidget):
         layout.addWidget(self._build_test_log_card(), 2)
         return page
 
+    def _build_ros_automation_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self._build_ros_status_card())
+        layout.addWidget(self._build_inventory_card())
+
+        self.ros_workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.ros_workspace_splitter.setChildrenCollapsible(False)
+        self.ros_workspace_splitter.addWidget(self._build_ros_tests_card())
+        self.ros_workspace_splitter.addWidget(self._build_ros_log_card())
+        self.ros_workspace_splitter.setStretchFactor(0, 64)
+        self.ros_workspace_splitter.setStretchFactor(1, 36)
+        self.ros_workspace_splitter.setSizes([820, 460])
+        layout.addWidget(self.ros_workspace_splitter, 1)
+        layout.addWidget(self._build_ros_run_bar())
+        return page
+
+    def _build_ros_status_card(self):
+        card = Card()
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        title = QLabel("ROS AUTOMATION")
+        title.setObjectName("CardTitle")
+        target_label = QLabel("Target Camera")
+        target_label.setObjectName("Muted")
+        self.target_camera_combo = QComboBox()
+        self.target_camera_combo.setMinimumWidth(280)
+        self.target_camera_combo.addItem("All Cameras", None)
+        self.inventory_discover_button = QPushButton("DISCOVER ALL")
+        self.inventory_discover_button.setObjectName("PrimaryButton")
+        self.ros_environment_details_button = QPushButton("ENVIRONMENT DETAILS")
+        self.ros_environment_status_label = QLabel("ROS NOT CHECKED")
+        self.ros_driver_status_label = QLabel("Driver UNKNOWN")
+        self.ros_camera_status_label = QLabel("Camera UNKNOWN")
+        self.ros_runner_status_label = QLabel("Runner IDLE")
+        self.ros_node_status_label = self.ros_camera_status_label
+        for label in (
+            self.ros_environment_status_label,
+            self.ros_driver_status_label,
+            self.ros_camera_status_label,
+            self.ros_runner_status_label,
+        ):
+            label.setObjectName("StatusBadge")
+            label.setContentsMargins(7, 3, 7, 3)
+        row.addWidget(title)
+        row.addSpacing(8)
+        row.addWidget(target_label)
+        row.addWidget(self.target_camera_combo, 1)
+        row.addWidget(self.inventory_discover_button)
+        row.addWidget(self.ros_environment_details_button)
+        row.addStretch()
+        for label in (
+            self.ros_environment_status_label,
+            self.ros_driver_status_label,
+            self.ros_camera_status_label,
+            self.ros_runner_status_label,
+        ):
+            row.addWidget(label)
+        card.body_layout.addLayout(row)
+        self.target_camera_combo.currentIndexChanged.connect(
+            self._on_target_camera_changed
+        )
+        self.inventory_discover_button.clicked.connect(
+            self._request_inventory_discovery
+        )
+        self.ros_environment_details_button.clicked.connect(
+            self._show_ros_environment_details
+        )
+        self.ros_status_card = card
+        self.ros_target_card = card
+        return card
+
+    def _build_target_camera_card(self):
+        return self.ros_status_card
+
+    def _build_inventory_card(self):
+        card = Card("Camera Inventory")
+        header = QHBoxLayout()
+        self.inventory_count_label = QLabel("0 Detected")
+        self.inventory_count_label.setObjectName("Muted")
+        self.inventory_state_label = QLabel("Not discovered")
+        self.inventory_state_label.setObjectName("Muted")
+        self.inventory_toggle_button = QPushButton("SHOW DETAILS")
+        header.addWidget(self.inventory_count_label)
+        header.addWidget(QLabel("|"))
+        header.addWidget(self.inventory_state_label)
+        header.addStretch()
+        header.addWidget(self.inventory_toggle_button)
+        card.body_layout.addLayout(header)
+
+        self.inventory_details_widget = QWidget()
+        details_layout = QHBoxLayout(self.inventory_details_widget)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(8)
+        details_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.inventory_table = QTableWidget(0, 8)
+        self.inventory_table.setHorizontalHeaderLabels(
+            ["Model", "Serial", "Vendor", "Transport", "USB", "ROS Driver", "ROS Readiness", "Status"]
+        )
+        self.inventory_table.verticalHeader().setVisible(False)
+        self.inventory_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.inventory_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.inventory_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.inventory_table.setAlternatingRowColors(True)
+        self.inventory_table.verticalHeader().setDefaultSectionSize(30)
+        self.inventory_table.setMinimumHeight(125)
+        inventory_header = self.inventory_table.horizontalHeader()
+        inventory_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 8):
+            inventory_header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.inventory_empty_label = QLabel(
+            "Jetson is disconnected. Connect from Dashboard first."
+        )
+        self.inventory_empty_label.setObjectName("Muted")
+        self.inventory_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        inventory_table_panel = QWidget()
+        inventory_table_layout = QVBoxLayout(inventory_table_panel)
+        inventory_table_layout.setContentsMargins(0, 0, 0, 0)
+        inventory_table_layout.addWidget(self.inventory_empty_label)
+        inventory_table_layout.addWidget(self.inventory_table, 1)
+        details_splitter.addWidget(inventory_table_panel)
+        details_splitter.addWidget(self._build_ros_device_detail_card())
+        details_splitter.setStretchFactor(0, 7)
+        details_splitter.setStretchFactor(1, 3)
+        details_splitter.setSizes([900, 380])
+        details_layout.addWidget(details_splitter)
+        card.body_layout.addWidget(self.inventory_details_widget)
+
+        self.inventory_toggle_button.clicked.connect(self._toggle_inventory_details)
+        self.inventory_table.cellClicked.connect(self._show_inventory_row_details)
+        self.ros_inventory_card = card
+        self._set_inventory_expanded(False)
+        return card
+
+    def _build_ros_device_detail_card(self):
+        card = Card("ROS Device Details")
+        self.inventory_detail_text = QTextEdit()
+        self.inventory_detail_text.setReadOnly(True)
+        self.inventory_detail_text.setPlainText(
+            "Select a camera to view ROS device details."
+        )
+        card.body_layout.addWidget(self.inventory_detail_text, 1)
+        self.ros_device_detail_card = card
+        return card
+
+    def _build_ros_environment_card(self):
+        card = Card("ROS Environment")
+        card.setVisible(False)
+        self.ros_environment_card = card
+        return card
+
+    def _build_ros_tests_card(self):
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+        self.ros_tests_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.ros_tests_splitter.setChildrenCollapsible(False)
+
+        table_card = Card("ROS Automated Tests")
+        self.ros_test_table = QTableWidget(0, 6)
+        self.ros_test_table.setHorizontalHeaderLabels(
+            ["Select", "ID", "Test Name", "Target", "Duration", "Status"]
+        )
+        self.ros_test_table.verticalHeader().setVisible(False)
+        self.ros_test_table.verticalHeader().setDefaultSectionSize(34)
+        self.ros_test_table.setAlternatingRowColors(True)
+        self.ros_test_table.setMinimumHeight(382)
+        self.ros_test_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.ros_test_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        ros_header = self.ros_test_table.horizontalHeader()
+        ros_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.ros_test_table.setColumnWidth(0, 45)
+        ros_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.ros_test_table.setColumnWidth(1, 90)
+        ros_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        ros_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.ros_test_table.setColumnWidth(3, 155)
+        ros_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.ros_test_table.setColumnWidth(4, 90)
+        ros_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.ros_test_table.setColumnWidth(5, 100)
+        self.ros_test_table.cellClicked.connect(self._on_ros_test_row_clicked)
+        table_card.body_layout.addWidget(self.ros_test_table, 1)
+
+        detail_card = Card("Selected Test Detail")
+        self.ros_test_detail_text = QTextEdit()
+        self.ros_test_detail_text.setReadOnly(True)
+        self.ros_test_detail_text.setPlainText(
+            "Select ROS-001 through ROS-004 to view definition and result details."
+        )
+        self.ros_view_result_button = QPushButton("VIEW RESULT")
+        self.ros_view_result_button.setEnabled(False)
+        detail_card.body_layout.addWidget(self.ros_test_detail_text, 1)
+        detail_actions = QHBoxLayout()
+        detail_actions.addStretch()
+        detail_actions.addWidget(self.ros_view_result_button)
+        detail_card.body_layout.addLayout(detail_actions)
+
+        self.ros_tests_splitter.addWidget(table_card)
+        self.ros_tests_splitter.addWidget(detail_card)
+        self.ros_tests_splitter.setStretchFactor(0, 78)
+        self.ros_tests_splitter.setStretchFactor(1, 22)
+        self.ros_tests_splitter.setSizes([620, 175])
+        panel_layout.addWidget(self.ros_tests_splitter)
+        self.ros_test_table.itemChanged.connect(self._update_ros_selected_count)
+        self.ros_view_result_button.clicked.connect(self._view_selected_ros_result)
+        self.ros_tests_card = panel
+        return panel
+
+    def _build_ros_log_card(self):
+        card = Card("ROS Execution Log")
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Log Filter"))
+        self.ros_log_filter_combo = QComboBox()
+        self.ros_log_filter_combo.addItems(
+            ["ALL", "INFO", "PASS", "WARNING", "ERROR"]
+        )
+        self.ros_log_clear_button = QPushButton("CLEAR")
+        self.ros_log_auto_scroll_check = QCheckBox("AUTO SCROLL")
+        self.ros_log_auto_scroll_check.setChecked(True)
+        controls.addWidget(self.ros_log_filter_combo)
+        controls.addStretch()
+        controls.addWidget(self.ros_log_clear_button)
+        controls.addWidget(self.ros_log_auto_scroll_check)
+        card.body_layout.addLayout(controls)
+        self.ros_execution_log = QTextEdit()
+        self.ros_execution_log.setObjectName("LiveLog")
+        self.ros_execution_log.setReadOnly(True)
+        self.ros_execution_log.setMinimumWidth(360)
+        card.body_layout.addWidget(self.ros_execution_log, 1)
+        self.ros_log_filter_combo.currentTextChanged.connect(
+            self._render_ros_log
+        )
+        self.ros_log_clear_button.clicked.connect(self._clear_ros_log)
+        self.ros_log_card = card
+        return card
+
+    def _build_ros_run_bar(self):
+        card = Card()
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        self.ros_total_label = QLabel("Total 0")
+        self.ros_selected_tests_label = QLabel("Selected 0")
+        self.ros_pass_label = QLabel("PASS 0")
+        self.ros_fail_label = QLabel("FAIL 0")
+        self.ros_error_label = QLabel("ERROR 0")
+        self.ros_blocked_label = QLabel("BLOCKED 0")
+        for label in (
+            self.ros_total_label,
+            self.ros_selected_tests_label,
+            self.ros_pass_label,
+            self.ros_fail_label,
+            self.ros_error_label,
+            self.ros_blocked_label,
+        ):
+            label.setObjectName("Muted")
+            row.addWidget(label)
+        row.addStretch()
+        self.ros_run_tests_button = QPushButton("▶  RUN SELECTED")
+        self.ros_run_tests_button.setObjectName("PrimaryButton")
+        self.ros_cancel_tests_button = QPushButton("■  CANCEL")
+        self.ros_cancel_tests_button.setObjectName("DangerButton")
+        self.ros_cancel_tests_button.setEnabled(False)
+        row.addWidget(self.ros_run_tests_button)
+        row.addWidget(self.ros_cancel_tests_button)
+        card.body_layout.addLayout(row)
+        self.ros_run_tests_button.clicked.connect(self._run_selected_ros_tests)
+        self.ros_cancel_tests_button.clicked.connect(self._cancel_ros_test_run)
+        self.ros_run_bar = card
+        return card
+
+    def _toggle_inventory_details(self):
+        self._set_inventory_expanded(not self._inventory_expanded)
+
+    def _set_inventory_expanded(self, expanded):
+        self._inventory_expanded = bool(expanded)
+        if hasattr(self, "inventory_details_widget"):
+            self.inventory_details_widget.setVisible(self._inventory_expanded)
+        if hasattr(self, "inventory_toggle_button"):
+            self.inventory_toggle_button.setText(
+                "HIDE DETAILS" if self._inventory_expanded else "SHOW DETAILS"
+            )
+
+    def _set_ros_badge(self, label, text, state="idle"):
+        colors = {
+            "ok": ("#16883F", "#ECFDF3"),
+            "warning": ("#B54708", "#FFFAEB"),
+            "error": ("#D92D20", "#FEF3F2"),
+            "running": ("#155EEF", "#EFF4FF"),
+            "idle": ("#667085", "#F2F4F7"),
+        }
+        foreground, background = colors.get(state, colors["idle"])
+        label.setText(text)
+        label.setStyleSheet(
+            f"color:{foreground}; background:{background};"
+            "border-radius:8px; padding:3px 7px; font-weight:600;"
+        )
+
+    def _show_ros_environment_details(self):
+        dialog = self._ros_environment_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ROS Environment Details")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.resize(680, 330)
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(len(self._ros_environment_values), 2)
+        table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self._configure_read_only_table(table)
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        for row, (field, value) in enumerate(self._ros_environment_values.items()):
+            table.setItem(row, 0, QTableWidgetItem(field))
+            table.setItem(row, 1, QTableWidgetItem(str(value)))
+        close = QPushButton("CLOSE")
+        close.clicked.connect(dialog.close)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(close)
+        layout.addWidget(table, 1)
+        layout.addLayout(actions)
+        self.ros_environment_table = table
+        self._ros_environment_dialog = dialog
+        dialog.destroyed.connect(self._on_ros_environment_dialog_destroyed)
+        dialog.show()
+
+    def _on_ros_environment_dialog_destroyed(self, *_):
+        self._ros_environment_dialog = None
+        self.ros_environment_table = None
+
+    def _update_open_ros_environment_dialog(self):
+        table = getattr(self, "ros_environment_table", None)
+        if table is None:
+            return
+        for row, value in enumerate(self._ros_environment_values.values()):
+            item = table.item(row, 1)
+            if item is not None:
+                item.setText(str(value))
+
+    def _view_selected_ros_result(self):
+        test_id = self.ros_view_result_button.property("test_id")
+        result = self.ros_test_results.get(test_id)
+        if not result:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"ROS Test Result — {test_id}")
+        dialog.resize(760, 620)
+        layout = QVBoxLayout(dialog)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        sections = []
+        for key in (
+            "schema_version", "status", "started_at", "finished_at", "duration_s",
+            "device",
+            "configuration", "measurements", "rule_results",
+            "sub_results", "failure_reasons", "error", "cleanup_errors",
+        ):
+            sections.append(
+                f"{key.replace('_', ' ').title()}\n"
+                f"{self._readable_result_value(result.get(key))}"
+            )
+        rendered = "\n\n".join(sections)
+        if len(rendered) > 40000:
+            rendered = rendered[:40000] + "\n\n… result display truncated"
+        text.setPlainText(rendered)
+        close = QPushButton("CLOSE")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(text, 1)
+        layout.addWidget(close)
+        dialog.exec()
+
+    def _clear_ros_log(self):
+        self._ros_log_entries.clear()
+        self.ros_execution_log.clear()
+
+    @staticmethod
+    def _ros_log_filter_matches(selected_filter, level):
+        if selected_filter == "ALL":
+            return True
+        if selected_filter == "ERROR":
+            return level in {"ERROR", "FAIL"}
+        return selected_filter == level
+
+    def _render_ros_log(self, *_):
+        if not hasattr(self, "ros_execution_log"):
+            return
+        selected_filter = self.ros_log_filter_combo.currentText()
+        self.ros_execution_log.clear()
+        for timestamp, level, message in self._ros_log_entries:
+            if self._ros_log_filter_matches(selected_filter, level):
+                self._append_log_line(
+                    self.ros_execution_log, level, message, timestamp, False
+                )
+        if self.ros_log_auto_scroll_check.isChecked():
+            bar = self.ros_execution_log.verticalScrollBar()
+            bar.setValue(bar.maximum())
+
+    def _request_inventory_discovery(self):
+        if not self.camera_inventory_service.discover_all():
+            if self.camera_inventory_service.busy:
+                self._append_ros_log(
+                    "WARNING", "ROS Camera inventory discovery is already running."
+                )
+
+    def _on_inventory_discovery_started(self):
+        self.inventory_discover_button.setEnabled(False)
+        self.inventory_discover_button.setText("DISCOVERING...")
+        self.inventory_state_label.setText("Discovering...")
+        self._append_ros_log("INFO", "ROS Camera inventory discovery started.")
+
+    def _on_inventory_discovery_completed(self, snapshot):
+        devices = tuple(snapshot.devices)
+        self.inventory_discover_button.setText("DISCOVER ALL")
+        self.inventory_discover_button.setEnabled(self.jetson_service.is_connected)
+        self.inventory_count_label.setText(f"{len(devices)} Detected")
+        if snapshot.adapter_errors:
+            inventory_state = "Partial" if devices else "Discovery errors"
+        else:
+            inventory_state = "Ready" if devices else "No cameras detected"
+        self.inventory_state_label.setText(inventory_state)
+        self._populate_target_camera_selector(devices)
+        self._populate_inventory_table(devices)
+        self._sync_inventory_detail_after_refresh(devices)
+        self._refresh_ros_table_targets()
+        self._update_ros_status(snapshot)
+        if not snapshot.adapter_errors:
+            self._set_inventory_expanded(False)
+        for adapter, error in snapshot.adapter_errors.items():
+            self._append_ros_log(
+                "WARNING", f"{adapter} discovery unavailable: {error}"
+            )
+        for adapter, warnings in snapshot.adapter_warnings.items():
+            for warning in warnings:
+                self._append_ros_log("WARNING", f"{adapter}: {warning}")
+        family_counts = {}
+        for device in devices:
+            family_counts[device.family] = family_counts.get(device.family, 0) + 1
+            transport = device.transport.value
+            self._append_ros_log(
+                "INFO",
+                f"{device.model} SN{device.serial or '-'} detected via {transport}.",
+            )
+            if device.usb_speed is not None:
+                self._append_ros_log(
+                    "INFO", f"{device.model} actual USB connection: {device.usb_speed.value}."
+                )
+            if device.ros_driver:
+                self._append_ros_log(
+                    "INFO", f"ROS mapping: {device.model} -> {device.ros_driver}."
+                )
+            for warning in device.discovery_errors:
+                self._append_ros_log(
+                    "WARNING", f"{device.model} SN{device.serial or '-'}: {warning}"
+                )
+        for family, count in family_counts.items():
+            self._append_ros_log(
+                "INFO", f"{family} discovery: {count} device(s) found."
+            )
+        self._append_ros_log(
+            "INFO", f"Camera inventory complete: {len(devices)} device(s)."
+        )
+
+    def _on_inventory_discovery_failed(self, error):
+        self.inventory_discover_button.setText("DISCOVER ALL")
+        self.inventory_discover_button.setEnabled(self.jetson_service.is_connected)
+        blocked = str(error).startswith("BLOCKED:")
+        self.inventory_state_label.setText("BLOCKED" if blocked else "ERROR")
+        self._append_ros_log(
+            "WARNING" if blocked else "ERROR", f"Camera inventory: {error}"
+        )
+        self._update_ros_status()
+
+    def _on_inventory_cleared(self):
+        if not hasattr(self, "inventory_table"):
+            return
+        self._populate_inventory_table(())
+        self._populate_target_camera_selector(())
+        self._refresh_ros_table_targets()
+        self.inventory_count_label.setText("0 Detected")
+        self.inventory_state_label.setText("BLOCKED — Jetson disconnected")
+        self._selected_inventory_detail_uid = None
+        self.inventory_detail_text.setPlainText(
+            "Select a camera to view ROS device details."
+        )
+        self._update_ros_status()
+
+    def _populate_inventory_table(self, devices):
+        self.inventory_table.setRowCount(len(devices))
+        for row, device in enumerate(devices):
+            values = (
+                device.model,
+                device.serial or "-",
+                device.vendor,
+                device.transport.value,
+                device.usb_speed.value if device.usb_speed is not None else "-",
+                device.ros_driver or "-",
+                device.ros_readiness.value,
+                device.physical_status.value,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, device.device_uid)
+                self.inventory_table.setItem(row, column, item)
+        self._update_inventory_empty_state(devices)
+
+    def _populate_target_camera_selector(self, devices):
+        selected = self.camera_target_selection.retain_after_refresh(devices)
+        self.target_camera_combo.blockSignals(True)
+        self.target_camera_combo.clear()
+        self.target_camera_combo.addItem("All Cameras", None)
+        selected_index = 0
+        for index, device in enumerate(devices, start=1):
+            self.target_camera_combo.addItem(
+                f"{device.model} — SN {device.serial or '-'}", device.device_uid
+            )
+            if device.device_uid == selected:
+                selected_index = index
+        self.target_camera_combo.setCurrentIndex(selected_index)
+        self.target_camera_combo.blockSignals(False)
+
+    def _on_target_camera_changed(self, _index):
+        device_uid = self.target_camera_combo.currentData()
+        self.camera_target_selection.select(device_uid)
+        if device_uid:
+            self._selected_inventory_detail_uid = device_uid
+            self._select_inventory_row(device_uid)
+            self._render_inventory_details(device_uid)
+        if self._selected_ros_test_id:
+            self._show_ros_test_details(self._selected_ros_test_id)
+        self._refresh_ros_table_targets()
+
+    def _show_inventory_row_details(self, row, _column):
+        item = self.inventory_table.item(row, 0)
+        device_uid = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        self._selected_inventory_detail_uid = device_uid or None
+        self._render_inventory_details(device_uid)
+
+    def _render_inventory_details(self, device_uid):
+        device = self.camera_inventory_service.get_device(device_uid)
+        if device is None:
+            self.inventory_detail_text.setPlainText(
+                "Select a camera to view ROS device details."
+            )
+            return
+        capabilities = ", ".join(
+            name for name, available in device.capabilities.items() if available
+        ) or "-"
+        warnings = "\n".join(f"  {value}" for value in device.discovery_errors) or "  -"
+        self.inventory_detail_text.setPlainText(
+            f"Device UID: {device.device_uid}\nVendor: {device.vendor}\n"
+            f"Model: {device.model}\nSerial: {device.serial or '-'}\n"
+            f"Transport: {device.transport.value}\nPhysical Port: {device.physical_port or '-'}\n"
+            f"USB Speed: {device.usb_speed.value if device.usb_speed is not None else '-'}\n"
+            f"SDK Backend: {device.sdk_backend or '-'}\nROS Driver: {device.ros_driver or '-'}\n"
+            f"ROS Camera Model: {device.ros_camera_model or '-'}\n"
+            f"Suggested Namespace: {device.ros_namespace_hint or '-'}\n"
+            f"Capabilities: {capabilities}\nROS Readiness: {device.ros_readiness.value}\n"
+            f"Discovery Warnings:\n{warnings}"
+        )
+
+    def _sync_inventory_detail_after_refresh(self, devices):
+        available = {device.device_uid for device in devices}
+        detail_uid = self._selected_inventory_detail_uid
+        if detail_uid not in available:
+            detail_uid = self.camera_target_selection.selected_device_uid
+        if detail_uid not in available:
+            detail_uid = None
+        self._selected_inventory_detail_uid = detail_uid
+        if detail_uid:
+            self._select_inventory_row(detail_uid)
+            self._render_inventory_details(detail_uid)
+        else:
+            self.inventory_table.clearSelection()
+            self.inventory_detail_text.setPlainText(
+                "Select a camera to view ROS device details."
+            )
+
+    def _select_inventory_row(self, device_uid):
+        for row in range(self.inventory_table.rowCount()):
+            item = self.inventory_table.item(row, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == device_uid:
+                self.inventory_table.selectRow(row)
+                return
+
+    def _update_inventory_empty_state(self, devices=None):
+        devices = tuple(
+            self.camera_inventory_service.get_devices()
+            if devices is None else devices
+        )
+        self.inventory_empty_label.setVisible(not devices)
+        if devices:
+            return
+        if self.jetson_service.is_connected:
+            message = "No cameras discovered. Connect Jetson and click DISCOVER ALL."
+        else:
+            message = "Jetson is disconnected. Connect from Dashboard first."
+        self.inventory_empty_label.setText(message)
+
+    @staticmethod
+    def _aggregate_driver_readiness(devices):
+        statuses = {device.ros_readiness.value for device in devices}
+        if not statuses:
+            return "UNKNOWN"
+        if statuses == {"READY"}:
+            return "READY"
+        if "DRIVER_MISSING" in statuses:
+            return "DRIVER_MISSING"
+        if len(statuses) > 1:
+            return "PARTIAL"
+        return next(iter(statuses))
+
+    @staticmethod
+    def _driver_package_status(devices, package):
+        matching = [device for device in devices if device.ros_driver == package]
+        return CameraPage._aggregate_driver_readiness(matching)
+
+    def _update_ros_status(self, snapshot=None):
+        snapshot = snapshot or self.camera_inventory_service.inventory.snapshot
+        devices = tuple(snapshot.devices)
+        if not self.jetson_service.is_connected:
+            environment = "DISCONNECTED"
+        elif not snapshot.discovered_at:
+            environment = "NOT CHECKED"
+        elif snapshot.ros2_available is True:
+            environment = "AVAILABLE"
+        elif snapshot.ros2_available is False:
+            environment = "NOT AVAILABLE"
+        else:
+            environment = "UNKNOWN"
+        driver = self._aggregate_driver_readiness(devices)
+        environment_state = (
+            "ok" if environment == "AVAILABLE" else
+            "error" if environment in {"DISCONNECTED", "NOT AVAILABLE"} else
+            "idle"
+        )
+        driver_state = (
+            "ok" if driver == "READY" else
+            "error" if driver == "DRIVER_MISSING" else
+            "warning" if driver == "PARTIAL" else
+            "idle"
+        )
+        camera_ready = bool(devices) and all(
+            device.physical_status.value == "DETECTED" for device in devices
+        )
+        self._set_ros_badge(
+            self.ros_environment_status_label,
+            "ROS " + environment,
+            environment_state,
+        )
+        selected_drivers = sorted(
+            {device.ros_driver for device in devices if device.ros_driver}
+        )
+        driver_text = (
+            f"{selected_drivers[0]} {driver}"
+            if len(selected_drivers) == 1 else f"Drivers {driver}"
+        )
+        self._set_ros_badge(self.ros_driver_status_label, driver_text, driver_state)
+        self._set_ros_badge(
+            self.ros_camera_status_label,
+            "Camera READY" if camera_ready else "Camera NOT READY",
+            "ok" if camera_ready else "idle",
+        )
+        self._ros_environment_values.update({
+            "ROS Environment": environment,
+            "zed_wrapper": self._driver_package_status(devices, "zed_wrapper"),
+            "realsense2_camera": self._driver_package_status(
+                devices, "realsense2_camera"
+            ),
+            "Last Check": snapshot.discovered_at or "NEVER",
+        })
+        self._update_open_ros_environment_dialog()
+
     def _set_camera_subpage(self, index):
         self.camera_pages.setCurrentIndex(index)
         self.monitor_tab_button.setChecked(index == 0)
         self.tests_tab_button.setChecked(index == 1)
+        self.ros_automation_tab_button.setChecked(index == 2)
         self._refresh_runner_status()
 
     def _build_automation_summary_card(self):
@@ -643,6 +1395,26 @@ class CameraPage(QWidget):
                 "WARNING", "Connect Jetson from Dashboard first."
             )
         self._refresh_runner_status()
+        if hasattr(self, "inventory_discover_button"):
+            self.inventory_discover_button.setEnabled(
+                self.jetson_service.is_connected
+                and not self.camera_inventory_service.busy
+            )
+            if (
+                not self.jetson_service.is_connected
+                and not self.camera_inventory_service.get_devices()
+            ):
+                self.inventory_state_label.setText(
+                    "BLOCKED — Jetson disconnected"
+                )
+            elif (
+                self.jetson_service.is_connected
+                and not self.camera_inventory_service.get_devices()
+                and not self.camera_inventory_service.busy
+            ):
+                self.inventory_state_label.setText("Not discovered")
+            self._update_inventory_empty_state()
+            self._update_ros_status()
         if hasattr(self, "run_tests_button"):
             self._update_selected_test_count()
 
@@ -1286,6 +2058,419 @@ class CameraPage(QWidget):
         self._refresh_test_summaries()
         self._apply_test_filters()
 
+    def _load_ros_test_cases(self):
+        self.ros_test_table.blockSignals(True)
+        self.ros_test_table.setRowCount(len(self.ros_test_definitions))
+        for row, definition in enumerate(self.ros_test_definitions):
+            self.ros_test_statuses.setdefault(definition.test_id, "NOT RUN")
+            select_item = QTableWidgetItem()
+            select_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            select_item.setCheckState(Qt.CheckState.Unchecked)
+            self.ros_test_table.setItem(row, 0, select_item)
+            for column, value in enumerate(
+                (
+                    definition.test_id,
+                    definition.name,
+                    self._current_ros_target_label(),
+                    f"{int(definition.timeout_s)} s",
+                    self.ros_test_statuses[definition.test_id],
+                ),
+                start=1,
+            ):
+                self.ros_test_table.setItem(row, column, QTableWidgetItem(value))
+        self.ros_test_table.blockSignals(False)
+        if self._ros_test_definition_error:
+            self._append_ros_log(
+                "ERROR",
+                "ROS test definition configuration error: "
+                + self._ros_test_definition_error,
+            )
+        self._update_ros_selected_count()
+
+    def _current_ros_target_label(self):
+        if self.camera_target_selection.selected_device_uid is None:
+            return "All Cameras"
+        devices = self.camera_target_selection.selected_devices(
+            self.camera_inventory_service.get_devices()
+        )
+        if not devices:
+            return "Unavailable"
+        device = devices[0]
+        return f"{device.model} / {device.serial or '-'}"
+
+    def _refresh_ros_table_targets(self):
+        if not hasattr(self, "ros_test_table"):
+            return
+        target = self._current_ros_target_label()
+        for row in range(self.ros_test_table.rowCount()):
+            item = self.ros_test_table.item(row, 3)
+            if item is not None:
+                item.setText(target)
+
+    def _update_ros_selected_count(self, *_):
+        selected = sum(
+            self.ros_test_table.item(row, 0).checkState()
+            == Qt.CheckState.Checked
+            for row in range(self.ros_test_table.rowCount())
+        )
+        self.ros_selected_tests_label.setText(f"Selected {selected}")
+        self._refresh_ros_test_summary()
+        self._update_ros_test_controls()
+
+    def _on_ros_test_row_clicked(self, row, _column):
+        item = self.ros_test_table.item(row, 1)
+        if item:
+            self._selected_ros_test_id = item.text()
+            self._show_ros_test_details(item.text())
+
+    def _show_ros_test_details(self, test_id):
+        definition = next(
+            (item for item in self.ros_test_definitions if item.test_id == test_id),
+            None,
+        )
+        if definition is None:
+            return
+        selected = self.camera_target_selection.selected_devices(
+            self.camera_inventory_service.get_devices()
+        )
+        if self.camera_target_selection.selected_device_uid is None:
+            target = "All Cameras"
+        elif selected:
+            target = f"{selected[0].model} — SN{selected[0].serial or '-'}"
+        else:
+            target = "Selected camera unavailable"
+        drivers = ", ".join(
+            sorted({device.ros_driver or "UNSUPPORTED" for device in selected})
+        ) or "--"
+        parameters = "  |  ".join(
+            f"{key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
+            for key, value in definition.parameters.items()
+        ) or "--"
+        result = self.ros_test_results.get(test_id)
+        latest = self.ros_test_statuses.get(test_id, "NOT RUN")
+        measurement_lines = []
+        rule_lines = []
+        if result:
+            measurements = result.get("measurements") or {}
+            for key in (
+                "ros_distro",
+                "all_required_drivers_installed",
+                "all_devices_pass",
+                "selected_camera_count",
+            ):
+                if key in measurements:
+                    measurement_lines.append(
+                        f"{key.replace('_', ' ').title()}: "
+                        f"{self._format_detail_value(measurements[key])}"
+                    )
+            for sub_result in result.get("sub_results") or ():
+                device_measurements = sub_result.get("measurements") or {}
+                prefix = f"SN{sub_result.get('serial', '-')}"
+                summary = []
+                if test_id == "ROS-005":
+                    image = device_measurements.get("image") or {}
+                    info = device_measurements.get("camera_info") or {}
+                    summary.extend((
+                        f"image={image.get('width')}x{image.get('height')}",
+                        f"CameraInfo={info.get('width')}x{info.get('height')}",
+                        f"distortion={info.get('distortion_model') or '--'}",
+                        f"fx/fy={device_measurements.get('fx')}/{device_measurements.get('fy')}",
+                        f"finite={device_measurements.get('finite_values')}",
+                        f"frame relationship={device_measurements.get('frame_relationship_valid')}",
+                    ))
+                elif test_id == "ROS-006":
+                    topics = device_measurements.get("sensor_topics") or []
+                    summary.append("sensors=" + ", ".join(
+                        f"{item.get('capability')}:{item.get('availability_status')}"
+                        f"@{item.get('measured_rate_hz', 0)}Hz"
+                        for item in topics
+                    ))
+                    summary.extend((
+                        f"temperature={device_measurements.get('temperature_availability')}",
+                        f"rollbacks={device_measurements.get('mandatory_timestamp_rollback_count')}",
+                        f"non-finite={device_measurements.get('mandatory_non_finite_value_count')}",
+                    ))
+                elif test_id == "ROS-007":
+                    summary.extend(
+                        f"{item.get('topic')}: compatible={item.get('compatible_result')}, "
+                        f"negative={item.get('negative_actual_result')}"
+                        for item in device_measurements.get("qos_matrix") or []
+                    )
+                elif test_id == "ROS-008":
+                    summary.extend((
+                        f"record duration={device_measurements.get('record_duration_s')}s",
+                        f"bag size={device_measurements.get('bag_size_bytes')} bytes",
+                        f"topics={len(device_measurements.get('recorded_topics') or [])}",
+                        f"metadata={device_measurements.get('metadata_valid')}",
+                        f"replay={device_measurements.get('mandatory_replay_messages_received')}",
+                        f"deserialize errors={device_measurements.get('deserialize_error_count')}",
+                    ))
+                else:
+                    for key in (
+                        "node_alive", "mandatory_topics_present",
+                        "mandatory_messages_received", "width", "height",
+                        "encoding", "calculated_fps", "cleanup_success",
+                    ):
+                        if key in device_measurements:
+                            summary.append(
+                                f"{key.replace('_', ' ')}="
+                                f"{self._format_detail_value(device_measurements[key])}"
+                            )
+                summary.append(f"status={sub_result.get('status', '--')}")
+                measurement_lines.append(
+                    prefix + (": " + ", ".join(summary) if summary else "")
+                )
+                for rule in sub_result.get("rule_results") or ():
+                    rule_lines.append(
+                        ("PASS" if rule.get("passed") else "FAIL")
+                        + "  " + str(rule.get("metric"))
+                        + f" {rule.get('operator')} {rule.get('expected')}"
+                    )
+            if not rule_lines:
+                for rule in result.get("rule_results") or ():
+                    rule_lines.append(
+                        ("PASS" if rule.get("passed") else "FAIL")
+                        + "  " + str(rule.get("metric"))
+                        + f" {rule.get('operator')} {rule.get('expected')}"
+                    )
+        if not rule_lines:
+            rule_lines = [
+                f"{rule['metric']} {rule['operator']} {rule['expected']}"
+                for rule in definition.rules
+            ]
+        self.ros_test_detail_text.setPlainText(
+            f"Test ID: {definition.test_id}  |  Test Name: {definition.name}\n"
+            f"Target: {target}  |  Driver: {drivers}  |  "
+            f"Automation Key: {definition.automation_key}\n"
+            f"Parameters: {parameters}\n"
+            "Latest Measurements: "
+            + ("; ".join(measurement_lines) if measurement_lines else "--")
+            + "\nAcceptance / Rule Results: " + "; ".join(rule_lines)
+            + f"\nLatest Result: {latest}"
+        )
+        self.ros_view_result_button.setEnabled(result is not None)
+        self.ros_view_result_button.setProperty("test_id", test_id)
+
+    def _run_selected_ros_tests(self):
+        if self.test_runner_worker and self.test_runner_worker.isRunning():
+            self._append_ros_log(
+                "WARNING", "Camera-level automated tests are already running."
+            )
+            return
+        selected_ids = [
+            self.ros_test_table.item(row, 1).text()
+            for row in range(self.ros_test_table.rowCount())
+            if self.ros_test_table.item(row, 0).checkState()
+            == Qt.CheckState.Checked
+        ]
+        if not selected_ids:
+            return
+        definitions = [
+            item for item in self.ros_test_definitions
+            if item.test_id in selected_ids
+        ]
+        devices = tuple(
+            self.camera_target_selection.selected_devices(
+                self.camera_inventory_service.get_devices()
+            )
+        )
+        target_scope = (
+            "ALL_CAMERAS"
+            if self.camera_target_selection.selected_device_uid is None
+            else "INDIVIDUAL"
+        )
+        busy_serials = []
+        if self.connection_state == CameraConnectionState.STREAMING:
+            serial = self.device_combo.currentData()
+            if serial:
+                busy_serials.append(str(serial))
+        worker = RosCameraTestRunnerWorker(
+            definitions,
+            self.test_registry,
+            self.jetson_service,
+            devices,
+            target_scope,
+            busy_serials,
+            parent=self,
+        )
+        worker.test_started.connect(self._on_ros_test_started)
+        worker.test_finished.connect(self._on_ros_test_finished)
+        worker.log_event.connect(self._append_ros_log)
+        worker.suite_finished.connect(self._on_ros_test_suite_finished)
+        worker.finished.connect(self._on_ros_test_worker_finished)
+        self.ros_test_runner_worker = worker
+        self.tests_requested.emit(selected_ids)
+        self._append_ros_log(
+            "INFO",
+            f"Captured {target_scope} target snapshot with {len(devices)} camera(s).",
+        )
+        self.ros_test_table.setEnabled(False)
+        self.target_camera_combo.setEnabled(False)
+        self.inventory_discover_button.setEnabled(False)
+        self._update_ros_test_controls()
+        worker.start()
+
+    def _cancel_ros_test_run(self):
+        worker = self.ros_test_runner_worker
+        if worker and worker.isRunning():
+            self.ros_cancel_tests_button.setEnabled(False)
+            self._append_ros_log(
+                "WARNING",
+                "Cancelling ROS test run; owned-node cleanup will finish first.",
+            )
+            worker.cancel()
+
+    def _on_ros_test_started(self, test_id):
+        self._set_ros_test_status(test_id, "RUNNING")
+        self._set_ros_badge(
+            self.ros_runner_status_label, f"Runner {test_id}", "running"
+        )
+
+    def _on_ros_test_finished(self, test_id, status, result):
+        self.ros_test_results[test_id] = result
+        self._set_ros_test_status(test_id, status)
+        if test_id == "ROS-001":
+            self._render_ros_environment_result(result)
+
+    def _on_ros_test_suite_finished(self, summary, result_root):
+        self._append_ros_log(
+            "INFO",
+            "ROS Test Run Complete — " + ", ".join(
+                f"{name}: {summary.get(name, 0)}"
+                for name in (
+                    "total", "PASS", "FAIL", "ERROR", "BLOCKED", "CANCELLED"
+                )
+            ),
+        )
+        self._append_ros_log("INFO", f"Structured results: {result_root}")
+        self._refresh_ros_test_summary()
+
+    def _on_ros_test_worker_finished(self):
+        self.ros_test_runner_worker = None
+        self.ros_test_table.setEnabled(True)
+        self.target_camera_combo.setEnabled(True)
+        self.inventory_discover_button.setEnabled(
+            self.jetson_service.is_connected
+            and not self.camera_inventory_service.busy
+        )
+        self._update_ros_test_controls()
+        if self._shutdown_pending:
+            self._shutdown_pending = False
+            self.shutdown_ready.emit()
+
+    def _set_ros_test_status(self, test_id, status):
+        normalized = status.replace("_", " ")
+        self.ros_test_statuses[test_id] = normalized
+        for row in range(self.ros_test_table.rowCount()):
+            if self.ros_test_table.item(row, 1).text() == test_id:
+                item = self.ros_test_table.item(row, 5)
+                item.setText(normalized)
+                colors = {
+                    "RUNNING": "#155EEF",
+                    "PASS": "#16883F",
+                    "FAIL": "#D92D20",
+                    "ERROR": "#912018",
+                    "BLOCKED": "#B54708",
+                    "CANCELLED": "#667085",
+                    "NOT RUN": "#667085",
+                }
+                item.setForeground(QColor(colors.get(normalized, "#667085")))
+                break
+        self._refresh_ros_test_summary()
+        if self._selected_ros_test_id == test_id:
+            self._show_ros_test_details(test_id)
+
+    def _refresh_ros_test_summary(self):
+        if not hasattr(self, "ros_total_label"):
+            return
+        counts = {
+            name: 0
+            for name in (
+                "PASS", "FAIL", "ERROR", "BLOCKED", "CANCELLED",
+                "RUNNING", "NOT RUN",
+            )
+        }
+        for status in self.ros_test_statuses.values():
+            counts[status] = counts.get(status, 0) + 1
+        selected = sum(
+            self.ros_test_table.item(row, 0).checkState()
+            == Qt.CheckState.Checked
+            for row in range(self.ros_test_table.rowCount())
+        )
+        self.ros_total_label.setText(f"Total {len(self.ros_test_definitions)}")
+        self.ros_selected_tests_label.setText(f"Selected {selected}")
+        self.ros_pass_label.setText(f"PASS {counts['PASS']}")
+        self.ros_fail_label.setText(f"FAIL {counts['FAIL']}")
+        self.ros_error_label.setText(f"ERROR {counts['ERROR']}")
+        self.ros_blocked_label.setText(f"BLOCKED {counts['BLOCKED']}")
+
+    def _update_ros_test_controls(self):
+        if not hasattr(self, "ros_run_tests_button"):
+            return
+        running = bool(
+            self.ros_test_runner_worker
+            and self.ros_test_runner_worker.isRunning()
+        )
+        selected = any(
+            self.ros_test_table.item(row, 0).checkState()
+            == Qt.CheckState.Checked
+            for row in range(self.ros_test_table.rowCount())
+        )
+        camera_tests_running = bool(
+            self.test_runner_worker and self.test_runner_worker.isRunning()
+        )
+        self.ros_run_tests_button.setEnabled(
+            selected and not running and not camera_tests_running
+        )
+        self.ros_cancel_tests_button.setEnabled(running)
+        self._set_ros_badge(
+            self.ros_runner_status_label,
+            "Runner RUNNING" if running else "Runner IDLE",
+            "running" if running else "idle",
+        )
+
+    def _render_ros_environment_result(self, result):
+        measurements = result.get("measurements") or {}
+        driver_results = measurements.get("driver_results") or {}
+        self._ros_environment_values.update({
+            "ROS Distro": measurements.get("ros_distro") or "UNAVAILABLE",
+            "ROS Environment": (
+                "LOADED" if measurements.get("ros_environment_loaded")
+                else "UNAVAILABLE"
+            ),
+            "zed_wrapper": (
+                "FOUND" if driver_results.get("zed_wrapper", {}).get("installed")
+                else "NOT REQUIRED" if "zed_wrapper" not in driver_results
+                else "MISSING"
+            ),
+            "realsense2_camera": (
+                "FOUND"
+                if driver_results.get("realsense2_camera", {}).get("installed")
+                else "NOT REQUIRED" if "realsense2_camera" not in driver_results
+                else "MISSING"
+            ),
+            "Workspace": measurements.get("workspace_setup") or "NONE",
+            "Last Check": result.get("finished_at") or "UNKNOWN",
+        })
+        status = result.get("status") or "UNKNOWN"
+        distro = measurements.get("ros_distro")
+        self._set_ros_badge(
+            self.ros_environment_status_label,
+            f"ROS {str(distro).title()}" if distro else f"ROS {status}",
+            "ok" if status == "PASS" else "error",
+        )
+        required_drivers = sorted(driver_results)
+        driver_name = required_drivers[0] if len(required_drivers) == 1 else "Drivers"
+        drivers_ready = bool(measurements.get("all_required_drivers_installed"))
+        self._set_ros_badge(
+            self.ros_driver_status_label,
+            f"{driver_name} {'READY' if drivers_ready else 'MISSING'}",
+            "ok" if drivers_ready else "error",
+        )
+        self._update_open_ros_environment_dialog()
+
     def _update_selected_test_count(self, *_):
         selected = sum(
             self.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
@@ -1421,6 +2606,11 @@ class CameraPage(QWidget):
         return "--" if value is None else str(value)
 
     def _run_selected_tests(self):
+        if self.ros_test_runner_worker and self.ros_test_runner_worker.isRunning():
+            self._append_test_log(
+                "WARNING", "ROS automated tests are already running."
+            )
+            return
         selected = [
             self.test_table.item(row, 1).text()
             for row in range(self.test_table.rowCount())
@@ -1490,6 +2680,7 @@ class CameraPage(QWidget):
         self.clear_test_selection_button.setEnabled(True)
         self._set_actions_enabled(True)
         self._update_selected_test_count()
+        self._update_ros_test_controls()
         if self._shutdown_pending:
             self._shutdown_pending = False
             self.shutdown_ready.emit()
@@ -1557,12 +2748,31 @@ class CameraPage(QWidget):
     def _append_test_log(self, level, message):
         self._append_log_widget(self.test_execution_log, level, message)
 
+    def _append_ros_log(self, level, message):
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        level = level.upper()
+        self._ros_log_entries.append((timestamp, level, message))
+        selected_filter = self.ros_log_filter_combo.currentText()
+        if self._ros_log_filter_matches(selected_filter, level):
+            self._append_log_line(
+                self.ros_execution_log,
+                level,
+                message,
+                timestamp,
+                self.ros_log_auto_scroll_check.isChecked(),
+            )
+
     def append_log(self, level, message):
         self._append_log_widget(self.live_log, level, message)
 
     def _append_log_widget(self, widget, level, message):
         timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
         level = level.upper()
+        auto_scroll = widget is not self.live_log or self.auto_scroll_check.isChecked()
+        self._append_log_line(widget, level, message, timestamp, auto_scroll)
+
+    @staticmethod
+    def _append_log_line(widget, level, message, timestamp, auto_scroll):
         colors = {
             "INFO": "#3FB950",
             "PASS": "#3FB950",
@@ -1578,7 +2788,7 @@ class CameraPage(QWidget):
             f'<span style="color:#E6EDF3">{html.escape(message)}</span>'
         )
         widget.append(line)
-        if widget is not self.live_log or self.auto_scroll_check.isChecked():
+        if auto_scroll:
             bar = widget.verticalScrollBar()
             bar.setValue(bar.maximum())
 
@@ -1599,9 +2809,19 @@ class CameraPage(QWidget):
         self._set_state(CameraConnectionState.DISCONNECTED)
         self.run_tests_button.setEnabled(False)
         self.append_log("INFO", "Camera workspace ready. Select a profile to begin.")
+        self._append_ros_log(
+            "INFO",
+            "ROS Automation workspace ready. Discover cameras and run ROS-001 through ROS-008.",
+        )
 
     def shutdown_stream(self):
-        if self.test_runner_worker and self.test_runner_worker.isRunning():
+        if self.ros_test_runner_worker and self.ros_test_runner_worker.isRunning():
+            self._shutdown_pending = True
+            self._append_ros_log(
+                "INFO", "Application shutdown: cancelling ROS Camera test run."
+            )
+            self.ros_test_runner_worker.cancel()
+        elif self.test_runner_worker and self.test_runner_worker.isRunning():
             self._shutdown_pending = True
             self.append_log("INFO", "Application shutdown: cancelling Camera test run.")
             self.test_runner_worker.cancel()
