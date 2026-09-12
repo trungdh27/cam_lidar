@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from dataclasses import replace
+import re
 
 from devices.camera.models import CameraDevice, UsbSpeed, make_ros_namespace_hint
 from devices.camera.ros_automation.models import (
@@ -23,6 +25,18 @@ class RosCameraAdapter(ABC):
 
     def primary_image_topic(self, device: CameraDevice) -> str:
         return self.build_launch_spec(device).primary_image_topic
+
+    def build_invalid_launch_spec(self, device: CameraDevice) -> tuple[RosLaunchSpec, dict]:
+        """Return a contained, adapter-approved invalid launch configuration."""
+        spec = self.build_launch_spec(device)
+        # Never use an unknown trailing launch argument as failure injection:
+        # Python launch files may accept/ignore it.  Adapters override this
+        # with a parameter their driver actively consumes.
+        invalid_serial = "__phase83d_no_such_camera__"
+        return replace(spec, selected_serial=invalid_serial), {
+            "strategy": "adapter_must_override_invalid_launch",
+            "invalid_serial": invalid_serial,
+        }
 
     def camera_info_requirement(self, device: CameraDevice) -> RosTopicRequirement:
         requirements = self.build_launch_spec(device).mandatory_topics
@@ -176,6 +190,40 @@ class ZedRosAdapter(RosCameraAdapter):
             primary_image_topic=primary,
         )
 
+    def build_invalid_launch_spec(self, device: CameraDevice) -> tuple[RosLaunchSpec, dict]:
+        """Use zed_wrapper's consumed camera_model argument in an isolated namespace."""
+        spec = self.build_launch_spec(device)
+        invalid_model = "phase83d_invalid_zed_model"
+        camera_name = "phase83d_invalid_" + re.sub(
+            r"[^a-zA-Z0-9]+", "_", device.device_uid
+        ).strip("_")[-24:]
+        namespace_parent = "test_recovery_invalid"
+        namespace = "/" + namespace_parent + "/" + camera_name
+        arguments = []
+        for argument in spec.arguments:
+            if argument.startswith("camera_model:="):
+                arguments.append("camera_model:=" + invalid_model)
+            elif argument.startswith("camera_name:="):
+                arguments.append("camera_name:=" + camera_name)
+            elif argument.startswith("namespace:="):
+                arguments.append("namespace:=" + namespace_parent)
+            else:
+                arguments.append(argument)
+        return replace(
+            spec,
+            arguments=tuple(arguments),
+            namespace=namespace,
+            expected_node=namespace,
+            ros_camera_model=invalid_model,
+            primary_image_topic=spec.primary_image_topic.replace(
+                spec.namespace.rstrip("/"), namespace, 1
+            ),
+        ), {
+            "strategy": "zed_wrapper_invalid_camera_model",
+            "camera_model": invalid_model,
+            "namespace": namespace,
+        }
+
     def sensor_topics(self, device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
         if device.ros_camera_model == "zedxm":
             return (
@@ -290,6 +338,39 @@ class RealSenseRosAdapter(RosCameraAdapter):
             mandatory_topics=requirements,
             primary_image_topic=requirements[0].topic(namespace),
         )
+
+    def build_invalid_launch_spec(self, device: CameraDevice) -> tuple[RosLaunchSpec, dict]:
+        spec = self.build_launch_spec(device)
+        camera_name = "phase83d_invalid_" + re.sub(
+            r"[^a-zA-Z0-9]+", "_", device.device_uid
+        ).strip("_")[-24:]
+        namespace_parent = "test_recovery_invalid"
+        namespace = "/" + namespace_parent + "/" + camera_name
+        invalid_serial = "phase83d_no_such_realsense"
+        arguments = []
+        for argument in spec.arguments:
+            if argument.startswith("serial_no:="):
+                arguments.append("serial_no:=_" + invalid_serial)
+            elif argument.startswith("camera_name:="):
+                arguments.append("camera_name:=" + camera_name)
+            elif argument.startswith("camera_namespace:="):
+                arguments.append("camera_namespace:=" + namespace_parent)
+            else:
+                arguments.append(argument)
+        return replace(
+            spec,
+            arguments=tuple(arguments),
+            namespace=namespace,
+            expected_node=namespace,
+            selected_serial=invalid_serial,
+            primary_image_topic=spec.primary_image_topic.replace(
+                spec.namespace.rstrip("/"), namespace, 1
+            ),
+        ), {
+            "strategy": "realsense_nonexistent_serial",
+            "serial": invalid_serial,
+            "namespace": namespace,
+        }
 
     def sensor_topics(self, _device: CameraDevice) -> tuple[RosTopicRequirement, ...]:
         return (

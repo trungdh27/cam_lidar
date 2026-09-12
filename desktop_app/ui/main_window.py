@@ -23,6 +23,7 @@ from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
+from desktop_app.ui.ai_page import AiPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 from desktop_app.testing.lidar_tests import build_lidar_test_registry
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         ("◉", "Dashboard"),
         ("▦", "Devices"),
         ("▣", "Camera"),
+        ("✦", "AI"),
         ("◌", "LiDAR"),
         ("⌘", "IMU"),
         ("▤", "CAN"),
@@ -147,14 +149,14 @@ class MainWindow(QMainWindow):
             0: ("Dashboard", "Hardware test overview."),
             1: ("Devices", "Connected device inventory."),
             2: ("Camera", "Camera module."),
-            4: ("IMU", "IMU module."),
-            5: ("CAN", "CAN module."),
-            6: ("EtherCAT", "EtherCAT module."),
-            7: ("Test Runner", "Cross-device test runner."),
-            8: ("History", "Test session history."),
-            9: ("Evidence", "Evidence storage."),
-            10: ("Reports", "Test reports."),
-            11: ("Settings", "Application settings."),
+            5: ("IMU", "IMU module."),
+            6: ("CAN", "CAN module."),
+            7: ("EtherCAT", "EtherCAT module."),
+            8: ("Test Runner", "Cross-device test runner."),
+            9: ("History", "Test session history."),
+            10: ("Evidence", "Evidence storage."),
+            11: ("Reports", "Test reports."),
+            12: ("Settings", "Application settings."),
         }
 
         for index in range(len(self.NAV_ITEMS)):
@@ -180,6 +182,9 @@ class MainWindow(QMainWindow):
                 self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
             elif index == 3:
+                self.ai_page = AiPage(self.jetson_state, self.jetson_service)
+                self.pages.addWidget(self.ai_page)
+            elif index == 4:
                 self.lidar_page = LidarPage(
                     self.jetson_state,
                     self.jetson_service,
@@ -222,6 +227,11 @@ class MainWindow(QMainWindow):
         if self.test_execution_service.running:
             self.test_execution_service.cancel()
         self.lidar_stream_service.shutdown()
+        if hasattr(self, "ai_page") and self.ai_page._worker and self.ai_page._worker.isRunning():
+            event.ignore()
+            self.ai_page.cancel()
+            QTimer.singleShot(17000, self.close)
+            return
         if (
             hasattr(self, "camera_page")
             and (

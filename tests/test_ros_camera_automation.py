@@ -502,6 +502,7 @@ class RosCameraHandlerTests(unittest.TestCase):
         for path in (
             "testcases/camera/definitions/phase8_3a.json",
             "testcases/camera/definitions/phase8_3b.json",
+            "testcases/camera/definitions/phase8_3d_a.json",
         ):
             definitions.extend(load_definitions(path, self.registry))
         self.definitions = {item.test_id: item for item in definitions}

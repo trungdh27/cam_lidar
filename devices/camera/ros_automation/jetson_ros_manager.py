@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -559,6 +560,41 @@ finally:
 """
 
 
+GRAPH_PROBE = r"""
+import json
+import os
+import sys
+
+import rclpy
+
+MARKER = "CAMERA_ROS_GRAPH_JSON="
+request = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+topics = [str(item) for item in request.get("topics") or []]
+rclpy.init(args=None)
+node = rclpy.create_node("cam_lidar_graph_probe_" + str(os.getpid()))
+try:
+    # Discovery callbacks are processed directly by this probe; this does not
+    # depend on the ros2 CLI daemon cache.
+    for _ in range(3):
+        rclpy.spin_once(node, timeout_sec=0.05)
+    names = []
+    for name, namespace in node.get_node_names_and_namespaces():
+        full_name = name if str(name).startswith("/") else (
+            str(namespace).rstrip("/") + "/" + str(name)
+        )
+        names.append(full_name if full_name.startswith("/") else "/" + full_name)
+    publisher_counts = {
+        topic: len(node.get_publishers_info_by_topic(topic)) for topic in topics
+    }
+    print(MARKER + json.dumps({
+        "nodes": sorted(set(names)), "publisher_counts": publisher_counts,
+    }, separators=(",", ":")))
+finally:
+    node.destroy_node()
+    rclpy.shutdown()
+"""
+
+
 def emit(payload):
     print(MARKER + json.dumps(payload, separators=(",", ":")))
 
@@ -782,6 +818,17 @@ def read_json(path, default=None):
         return {} if default is None else default
 
 
+def verify_owned_identity(metadata, request):
+    if not metadata or metadata.get("owned_by_test") is not True:
+        return False
+    for key in ("session_id", "device_uid", "pid", "process_group"):
+        requested = request.get(key)
+        actual = metadata.get(key)
+        if requested is None or str(requested) != str(actual):
+            return False
+    return True
+
+
 def graph(environment):
     node_code, node_output, node_error = command_result(["ros2", "node", "list"], environment)
     topic_code, topic_output, topic_error = command_result(["ros2", "topic", "list", "-t"], environment)
@@ -796,6 +843,35 @@ def graph(environment):
         "topics": topics,
         "node_query_error": None if node_code == 0 else node_error,
         "topic_query_error": None if topic_code == 0 else topic_error,
+    }
+
+
+def direct_graph_probe(environment, topics=()):
+    """One direct rclpy graph sample for recovery-critical node loss checks."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", GRAPH_PROBE, json.dumps({"topics": list(topics)})], env=environment,
+            capture_output=True, text=True, timeout=4, check=False,
+        )
+    except Exception as exc:
+        return {"nodes": [], "publisher_counts": {}, "ok": False, "method": "rclpy_direct", "error": str(exc)}
+    payload = None
+    for line in reversed(result.stdout.splitlines()):
+        if line.startswith("CAMERA_ROS_GRAPH_JSON="):
+            try:
+                payload = json.loads(line.split("=", 1)[1])
+            except json.JSONDecodeError:
+                pass
+            break
+    if result.returncode != 0 or payload is None:
+        return {
+            "nodes": [], "publisher_counts": {}, "ok": False, "method": "rclpy_direct",
+            "error": (result.stderr or result.stdout or "rclpy graph probe failed")[-2000:],
+        }
+    return {
+        "nodes": list(payload.get("nodes") or ()),
+        "publisher_counts": dict(payload.get("publisher_counts") or {}), "ok": True,
+        "method": "rclpy_direct", "error": None,
     }
 
 
@@ -901,6 +977,29 @@ try:
         emit({"ok": True, "environment": environment_info})
         raise SystemExit(0)
 
+    if action == "launch_arguments":
+        package_name = str(request.get("package") or "")
+        launch_file = str(request.get("launch_file") or "")
+        environment_info, environment = resolve_environment(
+            [package_name], request.get("setup_files")
+        )
+        package = environment_info.get("packages", {}).get(package_name, {})
+        if not environment_info.get("environment_ready") or not package.get("installed"):
+            emit({"ok": False, "error_type": "ROS_DRIVER_MISSING", "error": "Launch package is unavailable", "environment": environment_info})
+            raise SystemExit(0)
+        code, output, error = command_result(
+            ["ros2", "launch", package_name, launch_file, "--show-args"],
+            environment, timeout=8,
+        )
+        if code != 0:
+            emit({"ok": False, "error_type": "ROS_LAUNCH_ARGUMENTS_UNAVAILABLE", "error": (error or output or "ros2 launch --show-args failed")[-2000:]})
+            raise SystemExit(0)
+        emit({"ok": True, "launch_arguments": {
+            "package": package_name, "launch_file": launch_file,
+            "output": output[-8000:],
+        }})
+        raise SystemExit(0)
+
     if action == "start":
         spec = request["launch_spec"]
         environment_info, environment = resolve_environment(
@@ -918,29 +1017,38 @@ try:
             raise SystemExit(0)
 
         existing_graph = graph(environment)
+        stale_cli_node = False
         if spec["expected_node"] in existing_graph["nodes"]:
-            code, output, error = command_result(
-                ["ros2", "param", "get", spec["expected_node"], spec["serial_parameter"]],
-                environment,
-                timeout=4,
-            )
-            digits = re.findall(r"\d+", output)
-            verified = code == 0 and spec["selected_serial"] in digits
-            if not verified:
-                emit({"ok": False, "error_type": "CAMERA_BUSY", "error": "A matching ROS node exists but its physical serial cannot be verified", "nodes": existing_graph["nodes"], "serial_probe": (error or output)[-1000:]})
+            direct_graph = direct_graph_probe(environment)
+            # The daemon-backed CLI can retain a terminated test node.  Only
+            # disregard that one CLI entry when a fresh direct rclpy query
+            # proves the exact expected node is absent.  A live direct-graph
+            # match continues through strict serial/external-node protection.
+            if direct_graph.get("ok") and spec["expected_node"] not in direct_graph.get("nodes", []):
+                stale_cli_node = True
+            else:
+                code, output, error = command_result(
+                    ["ros2", "param", "get", spec["expected_node"], spec["serial_parameter"]],
+                    environment,
+                    timeout=4,
+                )
+                digits = re.findall(r"\d+", output)
+                verified = code == 0 and spec["selected_serial"] in digits
+                if not verified:
+                    emit({"ok": False, "error_type": "CAMERA_BUSY", "error": "A matching ROS node exists but its physical serial cannot be verified", "nodes": existing_graph["nodes"], "direct_graph": direct_graph, "serial_probe": (error or output)[-1000:]})
+                    raise SystemExit(0)
+                emit({"ok": True, "session": {
+                    "session_id": "external",
+                    "device_uid": request["device_uid"],
+                    "driver": spec["driver"],
+                    "namespace": spec["namespace"],
+                    "expected_node": spec["expected_node"],
+                    "selected_serial": spec["selected_serial"],
+                    "owned_by_test": False,
+                    "setup_files": environment_info["setup_files"],
+                    "launch_command_summary": "Existing verified node",
+                }, "environment": environment_info})
                 raise SystemExit(0)
-            emit({"ok": True, "session": {
-                "session_id": "external",
-                "device_uid": request["device_uid"],
-                "driver": spec["driver"],
-                "namespace": spec["namespace"],
-                "expected_node": spec["expected_node"],
-                "selected_serial": spec["selected_serial"],
-                "owned_by_test": False,
-                "setup_files": environment_info["setup_files"],
-                "launch_command_summary": "Existing verified node",
-            }, "environment": environment_info})
-            raise SystemExit(0)
 
         ROOT.mkdir(parents=True, exist_ok=True)
         session_id = re.sub(r"[^a-zA-Z0-9_-]", "_", request.get("session_id") or uuid.uuid4().hex)
@@ -981,12 +1089,13 @@ try:
             "started_at": utc_now(),
             "setup_files": environment_info["setup_files"],
             "launch_command_summary": " ".join(shlex.quote(item) for item in command),
+            "stale_cli_node_ignored": stale_cli_node,
         }
         (runtime / "session.json").write_text(json.dumps(metadata), encoding="utf-8")
         emit({"ok": True, "session": metadata, "environment": environment_info})
         raise SystemExit(0)
 
-    if action in ("status", "stop"):
+    if action in ("status", "stop", "terminate_owned", "release_owned"):
         session_id = re.sub(r"[^a-zA-Z0-9_-]", "_", request.get("session_id") or "")
         if session_id == "external":
             emit({"ok": True, "stopped": False, "external": True})
@@ -994,7 +1103,39 @@ try:
         runtime = ROOT / session_id
         metadata = read_json(runtime / "session.json")
         if not metadata:
+            if action == "release_owned":
+                # Release is intentionally idempotent for a session that this
+                # framework already reconciled.  There is no process or file
+                # left to affect, and external sessions use the early branch.
+                emit({"ok": True, "released": True, "already_released": True})
+                raise SystemExit(0)
             emit({"ok": False, "error_type": "ROS_NODE_EXITED", "error": "ROS session metadata was not found"})
+            raise SystemExit(0)
+        if not verify_owned_identity(metadata, request):
+            emit({"ok": False, "error_type": "ROS_SESSION_IDENTITY_MISMATCH", "error": "The requested operation does not match the exact test-owned session identity"})
+            raise SystemExit(0)
+        if action == "terminate_owned":
+            signal_sent = False
+            if process_group_alive(metadata):
+                try:
+                    os.killpg(int(metadata["process_group"]), signal.SIGTERM)
+                    signal_sent = True
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + min(3.0, float(request.get("remote_timeout_s") or 8))
+            while process_group_alive(metadata) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            process_status = read_json(runtime / "process_status.json")
+            emit({"ok": True, "signal": "SIGTERM", "signal_sent": signal_sent, "process_alive": process_group_alive(metadata), "remaining_pids": process_group_members(metadata), "process_exit_code": process_status.get("exit_code"), "stderr_summary": bounded_log(metadata.get("log_path", "")), "session": metadata})
+            raise SystemExit(0)
+        if action == "release_owned":
+            remaining = process_group_members(metadata)
+            if remaining:
+                emit({"ok": False, "error_type": "ROS_ORPHAN_PROCESS_DETECTED", "error": "Cannot release an owned session while its process group is alive", "remaining_pids": remaining})
+                raise SystemExit(0)
+            diagnostics = {"session": metadata, "process_status": read_json(runtime / "process_status.json"), "stderr_summary": bounded_log(metadata.get("log_path", ""))}
+            shutil.rmtree(runtime)
+            emit({"ok": True, "released": True, **diagnostics})
             raise SystemExit(0)
         if action == "stop":
             alive = process_group_alive(metadata)
@@ -1048,6 +1189,55 @@ try:
             "process_error": process_status.get("error"),
             "stderr_summary": bounded_log(metadata.get("log_path", "")),
         }, "environment": environment_info})
+        raise SystemExit(0)
+
+    if action == "audit_owned":
+        environment_info, environment = resolve_environment([], request.get("setup_files"))
+        expected_topics = [str(item) for item in request.get("expected_topics") or []]
+        current_graph = direct_graph_probe(environment, expected_topics) if environment is not None else {
+            "nodes": [], "ok": False, "method": "rclpy_direct",
+            "error": "ROS environment unavailable for graph probe",
+        }
+        requested_sessions = request.get("sessions") or []
+        session_states = {}
+        for identity in requested_sessions:
+            session_id = re.sub(r"[^a-zA-Z0-9_-]", "_", identity.get("session_id") or "")
+            runtime = ROOT / session_id
+            metadata = read_json(runtime / "session.json")
+            matches = verify_owned_identity(metadata, identity)
+            members = process_group_members(metadata) if matches else []
+            session_states[session_id] = {
+                "metadata_present": bool(metadata),
+                "identity_matches": matches,
+                "process_alive": bool(members),
+                "remaining_pids": members,
+            }
+        active_records = []
+        runtime_count = 0
+        if ROOT.exists():
+            for runtime in ROOT.iterdir():
+                if not runtime.is_dir() or runtime.name.startswith("bag_"):
+                    continue
+                metadata = read_json(runtime / "session.json")
+                if metadata.get("owned_by_test") is True:
+                    runtime_count += 1
+                    if process_group_alive(metadata):
+                        active_records.append(metadata.get("session_id"))
+        expected_nodes = [str(item) for item in request.get("expected_nodes") or []]
+        nodes = current_graph.get("nodes", [])
+        emit({"ok": True, "audit": {
+            "session_states": session_states,
+            "active_owned_session_ids": sorted(active_records),
+            "active_owned_process_count": len(active_records),
+            "owned_runtime_directory_count": runtime_count,
+            "node_names": nodes,
+            "expected_nodes_present": [item for item in expected_nodes if item in nodes],
+            "publisher_counts": current_graph.get("publisher_counts") or {},
+            "graph_probe_ok": bool(current_graph.get("ok")),
+            "graph_probe_method": current_graph.get("method"),
+            "graph_probe_error": current_graph.get("error"),
+            "environment": environment_info,
+        }})
         raise SystemExit(0)
 
     if action == "collect":
