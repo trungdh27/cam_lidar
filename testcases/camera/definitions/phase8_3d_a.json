@@ -1,0 +1,120 @@
+[
+  {
+    "id": "ROS-REC-001",
+    "name": "Repeated ROS Camera Launch / Stop Reliability",
+    "group": "ROS Recovery / Reliability",
+    "automation_key": "ros.recovery.launch_stop",
+    "priority": "P0",
+    "timeout_s": 300,
+    "parameters": {
+      "expected_distro": "humble",
+      "cycle_count": 5,
+      "startup_timeout_s": 25,
+      "message_timeout_s": 8,
+      "process_exit_timeout_s": 8,
+      "node_disappearance_timeout_s": 8,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true},
+      {"metric": "failed_cycle_count", "operator": "==", "expected": 0},
+      {"metric": "cleanup_failure_count", "operator": "==", "expected": 0},
+      {"metric": "orphan_process_count", "operator": "==", "expected": 0}
+    ],
+    "evidence": {"kind": "ros_recovery_cycles", "retain": ["result.json", "bounded_launch_diagnostics", "session_metadata"]}
+  },
+  {
+    "id": "ROS-REC-002",
+    "name": "ROS Camera Node Exit Detection and Controlled Recovery",
+    "group": "ROS Recovery / Reliability",
+    "automation_key": "ros.recovery.node_exit",
+    "priority": "P0",
+    "timeout_s": 120,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "message_timeout_s": 8,
+      "process_exit_timeout_s": 8,
+      "node_disappearance_timeout_s": 8,
+      "recovery_startup_timeout_s": 25,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true},
+      {"metric": "orphan_process_count", "operator": "==", "expected": 0}
+    ],
+    "evidence": {"kind": "ros_controlled_exit_recovery", "retain": ["result.json", "bounded_recovery_diagnostics", "session_metadata"]}
+  },
+  {
+    "id": "ROS-REC-005",
+    "name": "ROS Topic Interruption Detection",
+    "group": "ROS Recovery / Reliability",
+    "automation_key": "ros.recovery.topic_interruption",
+    "priority": "P0",
+    "timeout_s": 120,
+    "parameters": {
+      "expected_distro": "humble",
+      "startup_timeout_s": 25,
+      "baseline_sample_count": 3,
+      "message_timeout_s": 8,
+      "interruption_timeout_s": 5,
+      "process_exit_timeout_s": 8,
+      "node_disappearance_timeout_s": 8,
+      "recovery_startup_timeout_s": 25,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true},
+      {"metric": "orphan_process_count", "operator": "==", "expected": 0}
+    ],
+    "evidence": {"kind": "ros_topic_interruption_recovery", "retain": ["result.json", "bounded_recovery_diagnostics", "session_metadata"]}
+  },
+  {
+    "id": "ROS-REC-006",
+    "name": "ROS Launch Failure Handling",
+    "group": "ROS Recovery / Reliability",
+    "automation_key": "ros.recovery.launch_failure",
+    "priority": "P0",
+    "timeout_s": 100,
+    "parameters": {
+      "expected_distro": "humble",
+      "invalid_launch_timeout_s": 8,
+      "startup_timeout_s": 25,
+      "message_timeout_s": 8,
+      "node_disappearance_timeout_s": 8,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true},
+      {"metric": "invalid_session_remaining_count", "operator": "==", "expected": 0},
+      {"metric": "orphan_process_count", "operator": "==", "expected": 0}
+    ],
+    "evidence": {"kind": "ros_expected_launch_failure", "retain": ["result.json", "bounded_failure_diagnostics", "session_metadata"]}
+  },
+  {
+    "id": "ROS-REC-007",
+    "name": "Repeated Test Session Cleanup / Orphan Process Detection",
+    "group": "ROS Recovery / Reliability",
+    "automation_key": "ros.recovery.cleanup",
+    "priority": "P0",
+    "timeout_s": 540,
+    "parameters": {
+      "expected_distro": "humble",
+      "cycle_count": 10,
+      "startup_timeout_s": 25,
+      "message_timeout_s": 8,
+      "process_exit_timeout_s": 8,
+      "node_disappearance_timeout_s": 8,
+      "cleanup_timeout_s": 8
+    },
+    "rules": [
+      {"metric": "all_devices_pass", "operator": "==", "expected": true},
+      {"metric": "cleanup_failure_count", "operator": "==", "expected": 0},
+      {"metric": "orphan_process_count", "operator": "==", "expected": 0},
+      {"metric": "orphan_node_count", "operator": "==", "expected": 0},
+      {"metric": "stale_session_count", "operator": "==", "expected": 0},
+      {"metric": "ownership_leak_count", "operator": "==", "expected": 0}
+    ],
+    "evidence": {"kind": "ros_session_cleanup_stress", "retain": ["result.json", "bounded_cleanup_diagnostics", "session_metadata"]}
+  }
+]

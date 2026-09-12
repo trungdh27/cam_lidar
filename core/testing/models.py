@@ -49,6 +49,7 @@ class TestResult:
     error: dict[str, Any] | None = None
     cleanup_errors: list[str] = field(default_factory=list)
     sub_results: list[dict[str, Any]] = field(default_factory=list)
+    cycles: list[dict[str, Any]] = field(default_factory=list)
     schema_version: str = "1.0"
 
     def to_dict(self):

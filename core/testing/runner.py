@@ -22,6 +22,7 @@ class TestRunner:
             measurements, configuration, sub_results = handler.execute(context, definition)
             context.checkpoint(time.monotonic())
             result.measurements, result.configuration, result.sub_results = measurements, configuration, sub_results
+            result.cycles = list(measurements.get("cycles") or ())
             result.rule_results = self.evaluator.evaluate(measurements, definition.rules)
             failed = [item for item in result.rule_results if not item["passed"]]
             result.failure_reasons = [f"{x['metric']}={x['actual']} {x['operator']} {x['expected']}" for x in failed]
@@ -49,6 +50,7 @@ class TestRunner:
             result.status = TestStatus.CANCELLED; result.error = {"code": exc.code, "message": str(exc)}
             result.measurements = dict(getattr(handler, "partial_measurements", {}) or {})
             result.configuration = dict(getattr(handler, "partial_configuration", {}) or {})
+            result.cycles = list(result.measurements.get("cycles") or ())
         except TestTimeoutError as exc:
             result.status = TestStatus.ERROR; result.error = {"code": exc.code, "message": str(exc)}
         except Exception as exc:

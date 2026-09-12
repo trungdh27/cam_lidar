@@ -97,6 +97,8 @@ class RosHandlerBase:
                         + " did not stop; remaining PIDs: "
                         + (", ".join(str(pid) for pid in remaining) or "unknown")
                     )
+                elif hasattr(manager, "release_node"):
+                    manager.release_node(session)
             except Exception as exc:
                 errors.append(str(exc))
         self._sessions = []
@@ -134,7 +136,9 @@ class RosHandlerBase:
             )
         return environment, packages
 
-    def ensure_session(self, context, definition, device, environment):
+    def ensure_session(
+        self, context, definition, device, environment, startup_timeout_s=None
+    ):
         registry = context.services["ros_adapter_registry"]
         manager = context.services["ros_process_manager"]
         adapter = registry.resolve(device)
@@ -162,7 +166,11 @@ class RosHandlerBase:
                 "startup_time_s": 0.0,
                 "external_verified": True,
             }
-        startup_timeout = float(definition.parameters.get("startup_timeout_s") or 25)
+        startup_timeout = float(
+            startup_timeout_s
+            if startup_timeout_s is not None
+            else definition.parameters.get("startup_timeout_s") or 25
+        )
         context.log(
             "INFO",
             f"[{definition.test_id}][SN{device.serial}] Waiting for node {launch_spec.expected_node}.",
@@ -196,7 +204,13 @@ class RosHandlerBase:
     def cleanup_session(self, context, session):
         try:
             response = self.stop_session(context, session)
-            return bool(response.get("external") or response.get("stopped")), None
+            stopped = bool(response.get("external") or response.get("stopped"))
+            if stopped and session.owned_by_test:
+                manager = context.services["ros_process_manager"]
+                if hasattr(manager, "release_node"):
+                    released = manager.release_node(session)
+                    stopped = bool(released.get("released"))
+            return stopped, None
         except Exception as exc:
             # Keep the session in _sessions so TestRunner's final cleanup gets
             # a second bounded attempt even when per-device cleanup fails.
@@ -1329,3 +1343,7 @@ def register_ros_camera_handlers(registry):
     registry.register("ros.sensor_topics", RosSensorTopicsHandler())
     registry.register("ros.qos_matrix", RosQosMatrixHandler())
     registry.register("ros.bag_integrity", RosBagIntegrityHandler())
+    from devices.camera.ros_automation.recovery_handlers import (
+        register_ros_recovery_handlers,
+    )
+    register_ros_recovery_handlers(registry)

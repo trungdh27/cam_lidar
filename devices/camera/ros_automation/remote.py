@@ -103,11 +103,33 @@ class RosRemoteProcessManager:
         )
         return RosNodeSession.from_dict(response["session"])
 
+    def inspect_launch_arguments(self, launch_spec, setup_files, timeout_s=10):
+        response = self._call(
+            "launch_arguments",
+            {
+                "package": launch_spec.package,
+                "launch_file": launch_spec.launch_file,
+                "setup_files": list(setup_files),
+                "remote_timeout_s": timeout_s,
+            },
+            timeout_s + 3,
+        )
+        return response["launch_arguments"]
+
+    @staticmethod
+    def _session_identity(session):
+        return {
+            "session_id": session.session_id,
+            "device_uid": session.device_uid,
+            "pid": session.pid,
+            "process_group": session.process_group,
+        }
+
     def status(self, session):
         response = self._call(
             "status",
             {
-                "session_id": session.session_id,
+                **self._session_identity(session),
                 "remote_timeout_s": 10,
             },
             13,
@@ -120,10 +142,57 @@ class RosRemoteProcessManager:
         return self._call(
             "stop",
             {
-                "session_id": session.session_id,
+                **self._session_identity(session),
                 "remote_timeout_s": 10,
             },
             13,
+            cleanup=True,
+        )
+
+    def terminate_owned_node(self, session, timeout_s=8):
+        if not session.owned_by_test:
+            raise RosRemoteError(
+                "RECOVERY_REQUIRES_TEST_OWNED_SESSION",
+                "Controlled termination is forbidden for an external ROS session.",
+            )
+        return self._call(
+            "terminate_owned",
+            {
+                **self._session_identity(session),
+                "remote_timeout_s": timeout_s,
+            },
+            timeout_s + 3,
+            cleanup=True,
+        )
+
+    def audit_owned(
+        self, setup_files, sessions=(), expected_nodes=(), expected_topics=(),
+        timeout_s=8,
+    ):
+        response = self._call(
+            "audit_owned",
+            {
+                "setup_files": list(setup_files),
+                "sessions": [self._session_identity(item) for item in sessions],
+                "expected_nodes": list(expected_nodes),
+                "expected_topics": list(expected_topics),
+                "remote_timeout_s": timeout_s,
+            },
+            timeout_s + 3,
+            cleanup=True,
+        )
+        return response["audit"]
+
+    def release_node(self, session, timeout_s=8):
+        if not session.owned_by_test:
+            return {"released": False, "external": True}
+        return self._call(
+            "release_owned",
+            {
+                **self._session_identity(session),
+                "remote_timeout_s": timeout_s,
+            },
+            timeout_s + 3,
             cleanup=True,
         )
 

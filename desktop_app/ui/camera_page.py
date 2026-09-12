@@ -171,6 +171,7 @@ class CameraPage(QWidget):
             for definition_path in (
                 "testcases/camera/definitions/phase8_3a.json",
                 "testcases/camera/definitions/phase8_3b.json",
+                "testcases/camera/definitions/phase8_3d_a.json",
             ):
                 self.ros_test_definitions.extend(
                     load_definitions(definition_path, self.test_registry)
@@ -502,7 +503,7 @@ class CameraPage(QWidget):
         self.ros_test_detail_text = QTextEdit()
         self.ros_test_detail_text.setReadOnly(True)
         self.ros_test_detail_text.setPlainText(
-            "Select ROS-001 through ROS-004 to view definition and result details."
+            "Select a ROS test to view definition and result details."
         )
         self.ros_view_result_button = QPushButton("VIEW RESULT")
         self.ros_view_result_button.setEnabled(False)
@@ -2206,6 +2207,47 @@ class CameraPage(QWidget):
                         f"metadata={device_measurements.get('metadata_valid')}",
                         f"replay={device_measurements.get('mandatory_replay_messages_received')}",
                         f"deserialize errors={device_measurements.get('deserialize_error_count')}",
+                    ))
+                elif test_id == "ROS-REC-001":
+                    summary.extend((
+                        f"cycles={device_measurements.get('cycle_count')}/{device_measurements.get('configured_cycle_count')}",
+                        f"passed={device_measurements.get('passed_cycle_count')}",
+                        f"startup min/avg/max={device_measurements.get('startup_time_min')}/{device_measurements.get('startup_time_avg')}/{device_measurements.get('startup_time_max')}s",
+                        f"cleanup failures={device_measurements.get('cleanup_failure_count')}",
+                        f"orphans={device_measurements.get('orphan_process_count')}",
+                    ))
+                elif test_id == "ROS-REC-002":
+                    summary.extend((
+                        f"initial healthy={device_measurements.get('initial_session_healthy')}",
+                        f"exit detected={device_measurements.get('process_exit_detected')}",
+                        f"detection latency={device_measurements.get('detection_latency_s')}s",
+                        f"recovery={device_measurements.get('recovery_successful')}",
+                        f"recovered message={device_measurements.get('recovered_message_received')}",
+                        f"cleanup={device_measurements.get('final_cleanup_success')}",
+                    ))
+                elif test_id == "ROS-REC-005":
+                    summary.extend((
+                        f"baseline={device_measurements.get('baseline_stream_confirmed')}",
+                        f"interrupted={device_measurements.get('interruption_detected')}",
+                        f"detection latency={device_measurements.get('interruption_detection_latency_s')}s",
+                        f"recovered={device_measurements.get('stream_recovered')}",
+                        f"recovery latency={device_measurements.get('recovery_latency_s')}s",
+                    ))
+                elif test_id == "ROS-REC-006":
+                    summary.extend((
+                        f"invalid rejected={device_measurements.get('invalid_launch_rejected')}",
+                        f"failure category={device_measurements.get('error_category')}",
+                        f"cleanup={device_measurements.get('cleanup_success_after_failure')}",
+                        f"valid retry={device_measurements.get('valid_retry_started')}",
+                        f"retry message={device_measurements.get('valid_retry_message_received')}",
+                    ))
+                elif test_id == "ROS-REC-007":
+                    summary.extend((
+                        f"cycles={device_measurements.get('cycle_count')}/{device_measurements.get('configured_cycle_count')}",
+                        f"cleanup failures={device_measurements.get('cleanup_failure_count')}",
+                        f"orphan processes={device_measurements.get('orphan_process_count')}",
+                        f"orphan nodes={device_measurements.get('orphan_node_count')}",
+                        f"ownership leaks={device_measurements.get('ownership_leak_count')}",
                     ))
                 else:
                     for key in (

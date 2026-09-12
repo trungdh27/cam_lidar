@@ -104,7 +104,7 @@ class CameraSubpageTests(unittest.TestCase):
         self.assertGreaterEqual(self.page.test_table.minimumHeight(), 280)
 
     def test_ros_automation_lists_phase_8_3a_and_8_3b_tests_and_renders_details(self):
-        self.assertEqual(self.page.ros_test_table.rowCount(), 8)
+        self.assertEqual(self.page.ros_test_table.rowCount(), 13)
         self.assertEqual(
             [
                 self.page.ros_test_table.horizontalHeaderItem(column).text()
@@ -117,7 +117,10 @@ class CameraSubpageTests(unittest.TestCase):
                 self.page.ros_test_table.item(row, 1).text()
                 for row in range(self.page.ros_test_table.rowCount())
             ],
-            ["ROS-001", "ROS-002", "ROS-003", "ROS-004", "ROS-005", "ROS-006", "ROS-007", "ROS-008"],
+            [
+                "ROS-001", "ROS-002", "ROS-003", "ROS-004", "ROS-005", "ROS-006", "ROS-007", "ROS-008",
+                "ROS-REC-001", "ROS-REC-002", "ROS-REC-005", "ROS-REC-006", "ROS-REC-007",
+            ],
         )
         self.page._on_ros_test_row_clicked(3, 1)
         details = self.page.ros_test_detail_text.toPlainText()

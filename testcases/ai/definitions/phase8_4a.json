@@ -1,0 +1,32 @@
+[
+  {
+    "id": "AI-001", "name": "AI Environment Verification", "group": "AI Automation", "automation_key": "ai.environment", "priority": "P0", "timeout_s": 20,
+    "parameters": {"environment_timeout_s": 10},
+    "rules": [{"metric": "all_modules_pass", "operator": "==", "expected": true}],
+    "evidence": {"kind": "ai_environment", "retain": ["result.json", "bounded_environment_discovery"]}
+  },
+  {
+    "id": "AI-002", "name": "AI Runtime / Process / Node Launch Verification", "group": "AI Automation", "automation_key": "ai.launch", "priority": "P0", "timeout_s": 45,
+    "parameters": {"startup_timeout_s": 25, "cleanup_timeout_s": 8},
+    "rules": [{"metric": "all_modules_pass", "operator": "==", "expected": true}],
+    "evidence": {"kind": "ai_launch", "retain": ["result.json", "bounded_launch_log", "session_metadata"]}
+  },
+  {
+    "id": "AI-003", "name": "AI Input Verification", "group": "AI Automation", "automation_key": "ai.input", "priority": "P0", "timeout_s": 35,
+    "parameters": {"startup_timeout_s": 25, "sample_timeout_s": 8, "sample_count": 1, "cleanup_timeout_s": 8},
+    "rules": [{"metric": "all_modules_pass", "operator": "==", "expected": true}],
+    "evidence": {"kind": "ai_input", "retain": ["result.json", "input_metadata"]}
+  },
+  {
+    "id": "AI-004", "name": "AI Output Verification", "group": "AI Automation", "automation_key": "ai.output", "priority": "P0", "timeout_s": 35,
+    "parameters": {"startup_timeout_s": 25, "sample_timeout_s": 8, "sample_count": 1, "cleanup_timeout_s": 8},
+    "rules": [{"metric": "all_modules_pass", "operator": "==", "expected": true}],
+    "evidence": {"kind": "ai_output", "retain": ["result.json", "output_metadata"]}
+  },
+  {
+    "id": "AI-005", "name": "Basic Inference Smoke Test", "group": "AI Automation", "automation_key": "ai.inference_smoke", "priority": "P0", "timeout_s": 55,
+    "parameters": {"startup_timeout_s": 25, "sample_timeout_s": 10, "input_sample_count": 1, "output_sample_count": 1, "cleanup_timeout_s": 8},
+    "rules": [{"metric": "all_modules_pass", "operator": "==", "expected": true}],
+    "evidence": {"kind": "ai_inference_smoke", "retain": ["result.json", "input_output_metadata", "bounded_launch_log"]}
+  }
+]
