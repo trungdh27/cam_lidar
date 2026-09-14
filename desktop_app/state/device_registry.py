@@ -8,6 +8,19 @@ from PySide6.QtCore import QObject, Signal
 class DeviceRegistry(QObject):
     """Application-scoped last-known device state."""
 
+    SUMMARY_FIELDS = frozenset(
+        {
+            "device",
+            "family",
+            "model",
+            "serial",
+            "available",
+            "status",
+            "last_update",
+            "last_error",
+        }
+    )
+
     devices_changed = Signal(list)
 
     def __init__(self, parent=None):
@@ -36,6 +49,7 @@ class DeviceRegistry(QObject):
             key,
             {
                 "device": name,
+                "family": None,
                 "available": "unknown",
                 "model": None,
                 "serial": None,
@@ -46,6 +60,7 @@ class DeviceRegistry(QObject):
         updated = dict(current)
         updated["device"] = current.get("device") or name
         for field in (
+            "family",
             "available",
             "model",
             "serial",

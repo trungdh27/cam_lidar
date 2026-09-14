@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shlex
 
 from PySide6.QtCore import QObject, Signal
@@ -21,8 +22,10 @@ class LidarStreamService(QObject):
     STREAM_HELPER = "$HOME/.cam_lidar/bin/livox_stream"
     METRICS_MARKER = "LIVOX_STREAM_METRICS="
     EVENT_MARKER = "LIVOX_STREAM_EVENT="
+    POINT_PREVIEW_MARKER = "LIVOX_POINT_PREVIEW="
 
     log = Signal(str, str)
+    point_preview_received = Signal(object)
 
     def __init__(
         self,
@@ -169,6 +172,58 @@ class LidarStreamService(QObject):
             self._handle_metrics(line[len(self.METRICS_MARKER) :])
         elif line.startswith(self.EVENT_MARKER):
             self._handle_event(line[len(self.EVENT_MARKER) :])
+        elif line.startswith(self.POINT_PREVIEW_MARKER):
+            self._handle_point_preview(
+                line[len(self.POINT_PREVIEW_MARKER) :]
+            )
+
+    def _handle_point_preview(self, payload_text: str) -> None:
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            self.log.emit("WARNING", "Invalid point preview JSON ignored")
+            return
+        if not self._valid_point_preview(payload):
+            self.log.emit("WARNING", "Invalid point preview payload ignored")
+            return
+        self.point_preview_received.emit(payload)
+
+    @staticmethod
+    def _valid_point_preview(payload: object) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        timestamp = payload.get("timestamp")
+        data_type = payload.get("data_type")
+        count = payload.get("count")
+        points = payload.get("points")
+        if (
+            not isinstance(timestamp, int)
+            or isinstance(timestamp, bool)
+            or not isinstance(data_type, int)
+            or isinstance(data_type, bool)
+            or data_type != 1
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or not isinstance(points, list)
+            or count != len(points)
+            or count < 0
+            or count > 1200
+        ):
+            return False
+        for point in points:
+            if not isinstance(point, list) or len(point) != 4:
+                return False
+            for value in point:
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    return False
+                try:
+                    if not math.isfinite(float(value)):
+                        return False
+                except (OverflowError, ValueError):
+                    return False
+            if point[3] < 0 or point[3] > 255:
+                return False
+        return True
 
     def _handle_metrics(self, payload_text: str) -> None:
         try:

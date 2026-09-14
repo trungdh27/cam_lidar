@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -21,6 +22,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -38,6 +40,8 @@ constexpr std::uint32_t kLidarLogCacheSizeMb = 500;
 constexpr double kPointStaleMs = 2000.0;
 constexpr double kImuStaleMs = 1500.0;
 constexpr double kStartupGraceMs = 5000.0;
+constexpr std::size_t kMaxPreviewPoints = 1200;
+constexpr double kMillimetersToMeters = 0.001;
 
 using SteadyClock = std::chrono::steady_clock;
 
@@ -46,6 +50,13 @@ struct Options {
   std::string expected_lidar_ip;
   std::string model;
   int metrics_interval_ms = 500;
+};
+
+struct PreviewPoint {
+  float x;
+  float y;
+  float z;
+  std::uint8_t reflectivity;
 };
 
 struct RuntimeMetrics {
@@ -72,6 +83,11 @@ struct RuntimeMetrics {
   SteadyClock::time_point last_imu_time;
   std::uint64_t lidar_timestamp = 0;
   std::uint8_t lidar_time_type = 0;
+  std::vector<PreviewPoint> preview_points;
+  std::uint64_t preview_candidate_count = 0;
+  std::uint64_t preview_rng = 0x9e3779b97f4a7c15ULL;
+  std::uint64_t preview_timestamp = 0;
+  std::uint8_t preview_data_type = 0;
 };
 
 Options g_options;
@@ -279,6 +295,38 @@ void PointCloudCallback(const std::uint32_t handle,
   g_metrics.last_point_time = now;
   g_metrics.lidar_timestamp = DecodeTimestamp(data->timestamp);
   g_metrics.lidar_time_type = data->time_type;
+
+  // MID360/MID360S Cartesian high data is int32 XYZ in millimetres.
+  // Other SDK point formats are intentionally not included in the preview.
+  if (data->data_type == kLivoxLidarCartesianCoordinateHighData) {
+    for (std::uint16_t index = 0; index < data->dot_num; ++index) {
+      LivoxLidarCartesianHighRawPoint raw {};
+      std::memcpy(
+          &raw,
+          data->data + index * sizeof(LivoxLidarCartesianHighRawPoint),
+          sizeof(raw));
+      const PreviewPoint point {
+          static_cast<float>(raw.x * kMillimetersToMeters),
+          static_cast<float>(raw.y * kMillimetersToMeters),
+          static_cast<float>(raw.z * kMillimetersToMeters),
+          raw.reflectivity,
+      };
+      ++g_metrics.preview_candidate_count;
+      if (g_metrics.preview_points.size() < kMaxPreviewPoints) {
+        g_metrics.preview_points.push_back(point);
+        continue;
+      }
+      g_metrics.preview_rng =
+          g_metrics.preview_rng * 6364136223846793005ULL + 1ULL;
+      const std::uint64_t replacement =
+          g_metrics.preview_rng % g_metrics.preview_candidate_count;
+      if (replacement < kMaxPreviewPoints) {
+        g_metrics.preview_points[static_cast<std::size_t>(replacement)] = point;
+      }
+    }
+    g_metrics.preview_timestamp = g_metrics.lidar_timestamp;
+    g_metrics.preview_data_type = data->data_type;
+  }
 }
 
 void ImuDataCallback(const std::uint32_t handle,
@@ -308,6 +356,34 @@ void PrintEvent(const std::string& event,
 void PrintError(const std::string& error, const std::string& error_type) {
   PrintEvent("error", ",\"error_type\":\"" + JsonEscape(error_type) +
       "\",\"error\":\"" + JsonEscape(error) + "\"");
+}
+
+void PrintPointPreview() {
+  std::vector<PreviewPoint> points;
+  std::uint64_t timestamp = 0;
+  std::uint8_t data_type = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_metrics.mutex);
+    if (g_metrics.preview_points.empty()) return;
+    points.swap(g_metrics.preview_points);
+    timestamp = g_metrics.preview_timestamp;
+    data_type = g_metrics.preview_data_type;
+    g_metrics.preview_candidate_count = 0;
+  }
+
+  std::cout << std::fixed << std::setprecision(3)
+            << "LIVOX_POINT_PREVIEW={"
+            << "\"timestamp\":" << timestamp << ","
+            << "\"data_type\":" << static_cast<unsigned int>(data_type) << ","
+            << "\"count\":" << points.size() << ","
+            << "\"points\":[";
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    if (index != 0) std::cout << ",";
+    const PreviewPoint& point = points[index];
+    std::cout << "[" << point.x << "," << point.y << "," << point.z
+              << "," << static_cast<unsigned int>(point.reflectivity) << "]";
+  }
+  std::cout << "]}" << std::endl;
 }
 
 void PrintMetrics(SteadyClock::time_point started,
@@ -484,6 +560,7 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(g_options.metrics_interval_ms));
     PrintMetrics(started, &previous_emit);
+    PrintPointPreview();
   }
 
   LivoxLidarSdkUninit();

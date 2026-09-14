@@ -1,0 +1,810 @@
+Test ID,Nhóm,Test Name,Purpose,Pre-condition,Test Equipment,Test Procedure,Acceptance Criteria,Expected result,Th?i gian,Giá tr? ?o th?c t?,Pass/Fail,Evidence / Log,Executed By,Executed Date,Severity khi Fail
+ST-CPU-001,CPU/GPU/AI Stress,CPU 30% Load Stress,Ki?m tra robot có ho?t ??ng ?n ??nh khi CPU ph?i x? lý t?i kho?ng 30%.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC k?t n?i SSH; htop ho?c top; nhi?t k?/thermal camera.,"1. ??t robot ? tr?ng thái ??ng yên và b?o ??m E-stop ho?t ??ng.
+2. K?t n?i PC v?i robot qua SSH.
+3. M? terminal và ch?y `htop` ho?c `top`.
+4. Ghi l?i CPU, RAM và nhi?t ?? tr??c khi test.
+5. T?o CPU load kho?ng 30% b?ng công c? stress.
+6. Duy trì t?i trong 30 phút.
+7. C? m?i 5 phút ghi CPU load, nhi?t ?? CPU và CPU frequency.
+8. Trong th?i gian test ki?m tra robot v?n nh?n l?nh Start/Stop ho?c l?nh an toàn c? b?n.
+9. Sau 30 phút d?ng công c? stress.
+10. Ki?m tra log và ghi nh?n m?i l?i.",CPU duy trì g?n m?c m?c tiêu; robot v?n ph?n h?i l?nh; không t? reboot ho?c crash.,CPU trung bình ?25%; không reboot/crash; nhi?t ?? không v??t gi?i h?n thi?t k?; không có l?i Critical.,30 min,,,,,,Major
+ST-CPU-002,CPU/GPU/AI Stress,CPU 50% Load Stress,Ki?m tra robot có ho?t ??ng ?n ??nh khi CPU ph?i x? lý t?i kho?ng 50%.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC/SSH; htop/top; nhi?t k?/thermal camera.,"1. ??t robot ? v? trí an toàn.
+2. K?t n?i SSH và m? `htop`.
+3. Ghi CPU, RAM và nhi?t ?? ban ??u.
+4. T?o CPU load kho?ng 50%.
+5. Duy trì 30 phút.
+6. Ghi CPU load và nhi?t ?? m?i 5 phút.
+7. Ki?m tra robot v?n ph?n h?i l?nh an toàn.
+8. D?ng stress tool và ki?m tra log.",CPU duy trì g?n 50%; robot v?n ho?t ??ng bình th??ng và không crash.,CPU trung bình ?45%; không reboot/crash; nhi?t ?? trong gi?i h?n thi?t k?; không l?i Critical.,30 min,,,,,,Major
+ST-CPU-003,CPU/GPU/AI Stress,CPU 70% Load Stress,Ki?m tra robot có ho?t ??ng ?n ??nh khi CPU ph?i x? lý t?i kho?ng 70%.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC/SSH; htop/top; nhi?t k?/thermal camera.,"1. ??t robot ? v? trí an toàn.
+2. M? `htop` qua SSH.
+3. Ghi thông s? ban ??u.
+4. T?o CPU load kho?ng 70%.
+5. Duy trì 30 phút.
+6. Ghi CPU load, nhi?t ?? và frequency m?i 5 phút.
+7. Ki?m tra ch?c n?ng robot.
+8. D?ng stress và ki?m tra log.",CPU duy trì g?n 70%; robot v?n ph?n h?i l?nh và không crash.,CPU trung bình ?65%; không reboot/crash; nhi?t ?? trong gi?i h?n thi?t k?.,30 min,,,,,,Major
+ST-CPU-004,CPU/GPU/AI Stress,CPU 80% Load Stress,Ki?m tra ?? ?n ??nh khi CPU ho?t ??ng ? t?i cao kho?ng 80%.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC/SSH; htop/top; nhi?t k?/thermal camera.,"1. ??t robot ? v? trí an toàn và ki?m tra E-stop.
+2. K?t n?i SSH và m? `htop`.
+3. Ghi CPU/RAM/nhi?t ?? ban ??u.
+4. T?o CPU load kho?ng 80%.
+5. Duy trì 60 phút.
+6. Ghi CPU load và nhi?t ?? m?i 5 phút.
+7. Ki?m tra robot v?n nh?n l?nh an toàn.
+8. D?ng stress tool.
+9. Ki?m tra system log.",Robot v?n ho?t ??ng ?n ??nh ? t?i CPU cao; không t? reset.,CPU trung bình ?75%; không reboot/crash; không thermal shutdown; nhi?t ?? trong gi?i h?n.,60 min,,,,,,Major
+ST-CPU-005,CPU/GPU/AI Stress,CPU 90% Load Stress,Ki?m tra ?? ?n ??nh khi CPU ho?t ??ng ? t?i r?t cao.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC/SSH; htop/top; nhi?t k?/thermal camera.,"1. ??m b?o robot ? khu v?c an toàn.
+2. K?t n?i SSH và m? `htop`.
+3. Ghi CPU/RAM/nhi?t ?? ban ??u.
+4. T?o CPU load kho?ng 90%.
+5. Duy trì 60 phút.
+6. Theo dõi nhi?t ?? và frequency m?i 5 phút.
+7. Ki?m tra robot không m?t communication.
+8. D?ng stress và ki?m tra log.","Robot ti?p t?c ho?t ??ng, không crash ho?c reboot b?t th??ng.",CPU trung bình ?85%; không reboot/crash; không m?t sensor/communication; nhi?t ?? trong gi?i h?n thi?t k?.,60 min,,,,,,Major
+ST-CPU-006,CPU/GPU/AI Stress,CPU 95% Load Stress,Ki?m tra kh? n?ng ch?u t?i CPU g?n m?c t?i ?a.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; PC/SSH; htop/top; nhi?t k?/thermal camera.,"1. Ki?m tra E-stop và ??t robot ? tr?ng thái an toàn.
+2. M? `htop`.
+3. Ghi thông s? ban ??u.
+4. T?o CPU load kho?ng 95%.
+5. Duy trì 60 phút.
+6. Ghi CPU load, frequency và nhi?t ?? m?i 5 phút.
+7. Quan sát c?nh báo h? th?ng.
+8. D?ng stress tool và ki?m tra log.",CPU ch?u ???c t?i r?t cao; h? th?ng không b? treo ho?c t? kh?i ??ng l?i.,CPU trung bình ?90%; không reboot/crash; không kernel panic; nhi?t ?? không v??t gi?i h?n thi?t k?.,60 min,,,,,,Major
+ST-CPU-007,CPU/GPU/AI Stress,CPU + GPU ??ng th?i 90%,Ki?m tra robot khi CPU và GPU cùng ch?u t?i cao.,Robot b?t bình th??ng; pin ?50%; robot ? v? trí an toàn; không có c?nh báo Critical; ?ã b?t ghi log.,Robot; công c? stress CPU/GPU; camera/AI; thermal camera; PC.,"1. ??t robot ? khu v?c an toàn.
+2. Ki?m tra CPU/GPU/nhi?t ?? tr??c test.
+3. T?o CPU load ?90%.
+4. T?o GPU load ?90%.
+5. B?t camera và workload AI.
+6. Duy trì 60 phút.
+7. Ghi CPU, GPU, RAM, nhi?t ?? và l?i m?i 5 phút.
+8. Ki?m tra sensor và communication.
+9. D?ng workload và ki?m tra log.",CPU/GPU duy trì t?i cao; robot không crash; sensor và communication v?n ho?t ??ng.,Không thermal shutdown; không reboot/crash; không m?t sensor/communication; nhi?t ?? trong gi?i h?n.,60 min,,,,,,Major
+ST-CPU-008,CPU/GPU/AI Stress,AI inference liên t?c,Ki?m tra AI inference ch?y liên t?c trong th?i gian dài mà không suy gi?m b?t th??ng.,Robot b?t bình th??ng; camera ho?t ??ng; model AI ?ã ???c ki?m tra; pin ?50%; logging b?t.,Robot; camera; ?ng d?ng AI; PC; công c? ghi log.,"1. Kh?i ??ng robot và ki?m tra camera.
+2. Ch?y ?ng d?ng AI inference.
+3. Ki?m tra FPS và latency ban ??u.
+4. Cho inference ch?y liên t?c trong 4 gi?.
+5. M?i 15 phút ghi FPS, latency, CPU, GPU và RAM.
+6. Ghi l?i m?i inference error ho?c process restart.
+7. Sau 4 gi? d?ng inference.
+8. Ki?m tra log và so sánh FPS/latency ??u-cu?i.",AI inference ch?y liên t?c; FPS và latency không suy gi?m b?t th??ng; không crash.,Không có Critical inference error; FPS và latency n?m trong requirement; không process crash/restart ngoài d? ki?n.,4 h,,,,,,Major
+ST-CPU-009,CPU/GPU/AI Stress,Camera + AI + SLAM Stress,"Ki?m tra kh? n?ng x? lý perception khi camera, AI và SLAM ch?y cùng lúc.","Robot b?t bình th??ng; camera, SLAM và AI ?ã ki?m tra riêng; khu v?c di chuy?n an toàn; pin ?50%.",Robot; camera; AI application; SLAM; PC; ROS 2 monitoring.,"1. Ki?m tra camera, SLAM và AI ??u ho?t ??ng tr??c test.
+2. ??t robot vào khu v?c có không gian an toàn.
+3. B?t camera + SLAM + AI cùng lúc.
+4. Cho robot th?c hi?n k?ch b?n di chuy?n ch?m.
+5. Ghi CPU, GPU, FPS, latency và RAM m?i 5 phút.
+6. Ki?m tra dropped frame và tr?ng thái ROS 2 node.
+7. D?ng test và ki?m tra log.","Camera, AI và SLAM cùng ho?t ??ng; robot không m?t tracking ho?c crash.",Không node Critical b? crash; FPS và latency ??t requirement; không m?t frame v??t gi?i h?n.,2 h,,,,,,Major
+ST-CPU-010,CPU/GPU/AI Stress,CPU/GPU Thermal Throttling,Ki?m tra h? th?ng có gi?m t?c ?? CPU/GPU ?úng cách khi nhi?t ?? t?ng cao.,Robot b?t bình th??ng; pin ?50%; có gi?i h?n nhi?t ?? thi?t k?; thermal camera ho?t ??ng; logging b?t.,Robot; monitoring tool; thermal camera; PC.,"1. Ghi nhi?t ?? và CPU/GPU frequency ban ??u.
+2. T?o CPU và GPU load ?90% b?ng công c? ?ã phê duy?t.
+3. Duy trì workload t?i ?a 2 gi?.
+4. Ghi nhi?t ?? và frequency m?i phút.
+5. N?u frequency gi?m, ghi chính xác th?i ?i?m và nhi?t ?? lúc x?y ra.
+6. Ki?m tra robot có ti?p t?c ho?t ??ng ?n ??nh không.
+7. D?ng workload khi ??t gi?i h?n an toàn.
+8. Ki?m tra log.","N?u throttling x?y ra, h? th?ng gi?m frequency ?? b?o v? ph?n c?ng nh?ng v?n ho?t ??ng an toàn.",Nhi?t ?? không v??t gi?i h?n; throttling ?úng c? ch? thi?t k?; không thermal shutdown ngoài d? ki?n; không crash/reboot.,2 h,,,,,,Major
+ST-MEM-001,RAM/Memory Stress,RAM 50% Load,Ki?m tra robot có ho?t ??ng ?n ??nh khi kho?ng m?t n?a RAM ???c s? d?ng.,Robot kh?i ??ng bình th??ng; pin ?50%; ??t robot ? khu v?c an toàn; E-stop ho?t ??ng; không có l?i Critical; ?ã b?t ghi log.,Robot; PC/SSH; stress-ng ho?c công c? t??ng ???ng; htop; công c? xem log.,"1. ??t robot ? tr?ng thái an toàn và ki?m tra E-stop.
+2. K?t n?i PC v?i robot qua SSH.
+3. M? `htop` và ghi RAM, swap, CPU tr??c khi test.
+4. T?o memory load kho?ng 50% b?ng công c?.
+5. Duy trì t?i 30 phút.
+6. C? m?i 5 phút ghi RAM usage, swap usage và tr?ng thái ROS 2 node.
+7. Ki?m tra robot v?n ph?n h?i các l?nh an toàn c? b?n.
+8. D?ng công c? stress.
+9. Ki?m tra system log và ghi l?i l?i n?u có.",RAM duy trì g?n m?c m?c tiêu; robot v?n ph?n h?i; không OOM ho?c t? reboot.,RAM trung bình kho?ng 45–55%; không kernel panic; không reboot/crash; không m?t ch?c n?ng quan tr?ng; không OOM ngoài k?ch b?n.,30 min,,,,,,Major
+ST-MEM-002,RAM/Memory Stress,RAM 70% Load,Ki?m tra ?? ?n ??nh khi RAM ???c s? d?ng ? m?c cao kho?ng 70%.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Robot; PC/SSH; stress-ng ho?c công c? t??ng ???ng; htop; log viewer.,"1. Ki?m tra robot và E-stop.
+2. K?t n?i SSH và m? `htop`.
+3. Ghi RAM/swap tr??c test.
+4. T?o RAM load kho?ng 70%.
+5. Duy trì 30–60 phút.
+6. Ghi RAM, swap và tr?ng thái ROS 2 m?i 5 phút.
+7. Ki?m tra robot v?n ph?n h?i l?nh.
+8. D?ng stress tool và ki?m tra log.",H? th?ng v?n ho?t ??ng bình th??ng khi RAM ? m?c cao; không xu?t hi?n OOM.,RAM n?m kho?ng 65–75%; không kernel panic; không reboot/crash; không m?t ch?c n?ng quan tr?ng.,30–60 min,,,,,,Major
+ST-MEM-003,RAM/Memory Stress,RAM 80% Load,Ki?m tra ?? ?n ??nh khi RAM s? d?ng kho?ng 80%.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Robot; PC/SSH; stress-ng; htop; log viewer.,"1. Ki?m tra robot ? tr?ng thái an toàn.
+2. M? `htop` và ghi thông s? ban ??u.
+3. T?o RAM load kho?ng 80%.
+4. Duy trì 30–60 phút.
+5. M?i 5 phút ghi RAM, swap, CPU và tr?ng thái ROS 2.
+6. Ki?m tra ?ng d?ng/ROS 2 node quan tr?ng.
+7. D?ng stress và ki?m tra log.",Robot ti?p t?c ho?t ??ng; các node quan tr?ng không b? d?ng.,RAM kho?ng 75–85%; không OOM; không kernel panic/reboot; không critical node crash.,30–60 min,,,,,,Major
+ST-MEM-004,RAM/Memory Stress,RAM 90% Load,Ki?m tra kh? n?ng ch?u t?i RAM r?t cao và kh? n?ng h? th?ng v?n ho?t ??ng.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Robot; PC/SSH; stress-ng/memtester; htop; log viewer.,"1. ??t robot ? tr?ng thái an toàn.
+2. Ghi RAM và swap ban ??u.
+3. T?o RAM load kho?ng 90%.
+4. Duy trì 30 phút.
+5. Theo dõi RAM, swap, OOM và các ROS 2 node m?i 1–5 phút.
+6. N?u có c?nh báo nghiêm tr?ng ho?c robot có d?u hi?u b?t th??ng, d?ng test ngay.
+7. N?u test hoàn t?t, gi?m t?i và ki?m tra log.",H? th?ng ti?p t?c ho?t ??ng ho?c gi?m hi?u n?ng có ki?m soát; không x?y ra l?i ngoài d? ki?n.,RAM kho?ng 85–95%; không kernel panic; không reboot; không m?t ch?c n?ng quan tr?ng; hành vi khi thi?u RAM ?úng thi?t k?.,30 min,,,,,,Major
+ST-MEM-005,RAM/Memory Stress,RAM 95% Load,Ki?m tra hành vi c?a h? th?ng khi RAM g?n ??y.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t; ?ã xác nh?n gi?i h?n an toàn c?a h? th?ng.,Robot; PC/SSH; stress-ng/memtester; htop; log viewer.,"1. Ki?m tra E-stop và tr?ng thái robot.
+2. Ghi RAM, swap và process tr??c test.
+3. T?ng RAM usage t? t? lên kho?ng 95%, không t?ng ??t ng?t.
+4. Duy trì kho?ng 30 phút.
+5. Theo dõi OOM, swap, process và ROS 2 node.
+6. N?u robot treo, reboot ho?c xu?t hi?n l?i nghiêm tr?ng, ghi l?i và d?ng test.
+7. Gi?m t?i và ki?m tra h? th?ng sau test.",H? th?ng x? lý tình tr?ng RAM g?n ??y theo c? ch? thi?t k?; không m?t ki?m soát.,Không kernel panic; không reboot ngoài d? ki?n; không m?t d? li?u nghiêm tr?ng; OOM n?u có ph?i ???c x? lý ?úng thi?t k?.,30 min,,,,,,Major
+ST-MEM-006,RAM/Memory Stress,Memory Leak 8 gi?,Phát hi?n ch??ng trình ho?c node làm RAM t?ng liên t?c theo th?i gian.,Robot ho?t ??ng bình th??ng; workload c? ??nh ?ã ???c xác ??nh; pin/ngu?n ?? cho 8 gi?; logging b?t.,Robot; PC/SSH; script monitoring; htop; log collector; ??ng h? th?i gian.,"1. Kh?i ??ng robot và workload c? ??nh.
+2. Ghi RAM, swap và process count t?i th?i ?i?m 0 gi?.
+3. Ti?p t?c ghi t?i 1, 2, 4, 6 và 8 gi?.
+4. Không thay ??i workload trong quá trình test n?u không c?n thi?t.
+5. Ghi l?i m?i node/process restart.
+6. Sau 8 gi? d?ng workload và ki?m tra log.
+7. So sánh RAM ??u k?, gi?a k? và cu?i k?.",RAM có th? t?ng nh? trong giai ?o?n kh?i t?o nh?ng sau ?ó ?n ??nh; không t?ng liên t?c.,Không OOM; không critical node restart do thi?u RAM; xu h??ng RAM ?n ??nh sau khi workload ??t tr?ng thái steady-state.,8 h,,,,,,Major
+ST-MEM-007,RAM/Memory Stress,Memory Leak 24 gi?,Xác nh?n kh? n?ng qu?n lý RAM trong th?i gian ho?t ??ng dài.,Robot ho?t ??ng bình th??ng; workload th?c t? ?ã xác ??nh; ngu?n/pin ?? 24 gi?; logging và monitoring ho?t ??ng.,Robot; PC/SSH; monitoring script; htop; log collector.,"1. Kh?i ??ng workload th?c t?.
+2. Ghi RAM, swap, process count và tr?ng thái node t?i 0 gi?.
+3. Ghi l?i các thông s? t?i 2, 4, 8, 12, 16, 20 và 24 gi?.
+4. Ki?m tra log sau m?i m?c.
+5. Ghi nh?n m?i process restart, OOM ho?c b?t th??ng.
+6. Sau 24 gi? ki?m tra robot và so sánh RAM ??u-cu?i.",Robot duy trì workload; RAM không t?ng liên t?c ??n m?c gây l?i.,Không OOM; không reboot; không critical process crash do RAM; không có xu h??ng memory leak nghiêm tr?ng.,24 h,,,,,,Major
+ST-MEM-008,RAM/Memory Stress,Swap / Low-memory Recovery,Ki?m tra robot x? lý và ph?c h?i nh? th? nào khi b? nh? kh? d?ng gi?m xu?ng th?p.,Robot ho?t ??ng bình th??ng; ?ã xác ??nh gi?i h?n an toàn; có kh? n?ng d?ng test nhanh; logging b?t.,Robot; PC/SSH; stress-ng/memtester; htop; log viewer.,"1. Ghi RAM và swap ban ??u.
+2. T?ng memory usage t? t? ??n vùng th?p b? nh? ?ã ???c xác ??nh trong k? ho?ch test.
+3. Quan sát swap usage, OOM message và tr?ng thái các process.
+4. Không v??t gi?i h?n an toàn.
+5. Sau khi ghi nh?n hành vi, d?ng memory stress.
+6. Ki?m tra RAM và process có tr? l?i bình th??ng không.
+7. Ki?m tra system log.",H? th?ng ph?n ?ng theo thi?t k? và tr? l?i tr?ng thái ?n ??nh sau khi gi?m t?i.,Không m?t d? li?u nghiêm tr?ng; không reboot ngoài d? ki?n; các process quan tr?ng ???c b?o v?/recovery ?úng thi?t k?.,30 min,,,,,,Major
+ST-STO-001,Storage I/O Stress,Continuous Sequential Write,Ki?m tra SSD/eMMC có th? ghi d? li?u liên t?c trong th?i gian dài mà không b? l?i ho?c làm h? th?ng treo.,Robot kh?i ??ng bình th??ng; pin/ngu?n ?? 2 gi?; robot ? khu v?c an toàn; không có l?i Critical; ?ã b?t ghi log.,Robot; PC/SSH; SSD/eMMC; fio ho?c dd; smartctl; công c? xem log; công c? ?o nhi?t ??.,"1. ??t robot ? tr?ng thái an toàn và ki?m tra E-stop.
+2. K?t n?i PC v?i robot qua SSH.
+3. Ki?m tra dung l??ng tr?ng c?a SSD/eMMC và ghi l?i giá tr? ban ??u.
+4. Ki?m tra nhi?t ?? storage và tình tr?ng health n?u công c? h? tr?.
+5. Ch?y bài test ghi tu?n t? b?ng `fio` ho?c công c?.
+6. Duy trì workload trong 2 gi?.
+7. C? m?i 10 phút ghi t?c ?? ghi, nhi?t ?? và l?i I/O.
+8. Sau khi ?? 2 gi?, d?ng workload ?úng cách.
+9. Ki?m tra file test có t?n t?i và ??c l?i ???c.
+10. Ki?m tra system log ?? tìm I/O error ho?c filesystem error.",T?c ?? ghi t??ng ??i ?n ??nh; h? th?ng v?n ph?n h?i; file ghi ???c ??c l?i bình th??ng; không xu?t hi?n l?i I/O nghiêm tr?ng.,Không có I/O error Critical; file test ??c l?i ???c; t?c ?? ghi ??t requirement c?a storage; không freeze/reboot ngoài d? ki?n.,2 h,,,,,,Major
+ST-STO-002,Storage I/O Stress,Continuous Read/Write,Ki?m tra storage khi ??c và ghi d? li?u ??ng th?i trong th?i gian dài.,Robot kh?i ??ng bình th??ng; ngu?n ?? 2 gi?; storage có ?? dung l??ng; không l?i Critical; logging b?t.,Robot; PC/SSH; SSD/eMMC; fio; smartctl; log viewer; temperature monitor.,"1. Ki?m tra dung l??ng tr?ng và nhi?t ?? storage.
+2. Ghi l?i t?c ?? ??c/ghi ? tr?ng thái bình th??ng.
+3. C?u hình workload ??c và ghi ??ng th?i b?ng `fio`.
+4. B?t ??u workload và duy trì 2 gi?.
+5. M?i 10 phút ghi read speed, write speed, I/O error và nhi?t ??.
+6. Ki?m tra robot v?n ph?n h?i l?nh qu?n lý.
+7. D?ng workload.
+8. Ki?m tra file d? li?u và system log.",Storage v?n ??c/ghi ?n ??nh; h? th?ng không b? treo; d? li?u không b? h?ng.,Không I/O error Critical; file test ??c l?i ???c; read/write performance ??t requirement; không freeze/reboot ngoài d? ki?n.,2 h,,,,,,Major
+ST-STO-003,Storage I/O Stress,High-frequency Logging,Ki?m tra storage và h? th?ng logging khi d? li?u ???c ghi v?i t?n su?t cao.,Robot ho?t ??ng bình th??ng; workload logging ?ã ???c xác ??nh; storage còn ?? dung l??ng cho 2 gi?; logging system ho?t ??ng.,Robot; PC/SSH; SSD/eMMC; ROS 2 logging/rosbag ho?c logger c?a s?n ph?m; monitoring tool.,"1. Ki?m tra dung l??ng tr?ng tr??c test.
+2. Xác ??nh các log/topic c?n ghi và t?n su?t ghi.
+3. B?t high-frequency logging theo c?u hình test.
+4. Duy trì 2 gi?.
+5. M?i 10 phút ghi dung l??ng storage, t?c ?? ghi và l?i log.
+6. Ki?m tra log có ti?p t?c ???c t?o ??u ??n không.
+7. K?t thúc logging ?úng cách.
+8. M? m?t s? file log ?? ki?m tra có th? ??c ???c.",Log ???c ghi liên t?c; không m?t log b?t th??ng; h? th?ng v?n ho?t ??ng.,Không m?t d? li?u v??t requirement; file log ??c ???c; không I/O error Critical; không freeze/reboot.,2 h,,,,,,Major
+ST-STO-004,Storage I/O Stress,ROS Bag Recording,Ki?m tra kh? n?ng ghi d? li?u ROS 2/rosbag liên t?c trong th?i gian dài.,Robot ho?t ??ng bình th??ng; camera/sensor c?n ghi ?ang ho?t ??ng; storage ?? dung l??ng cho 4 gi?; logging b?t.,Robot; PC/SSH; SSD/eMMC; rosbag/ros2 bag; camera/sensor; monitoring tool.,"1. Ki?m tra các sensor/topic c?n ghi.
+2. Ki?m tra dung l??ng tr?ng và t?c ?? ghi storage.
+3. B?t ??u ghi ROS bag.
+4. Duy trì ghi liên t?c 4 gi?.
+5. M?i 15 phút ki?m tra dung l??ng còn l?i, t?c ?? ghi và tr?ng thái rosbag.
+6. Ghi nh?n dropped message ho?c warning n?u có.
+7. K?t thúc rosbag ?úng cách.
+8. M?/??c metadata và ki?m tra d? li?u trong bag.",ROS bag ???c ghi ?? th?i gian; d? li?u có th? m?/??c l?i; robot không b? treo.,Không Critical I/O error; ROS bag không b? corruption; d? li?u/topic quan tr?ng có th? ??c l?i; hi?u n?ng ??t requirement.,4 h,,,,,,Major
+ST-STO-005,Storage I/O Stress,Storage Full Handling,Ki?m tra h? th?ng ph?n ?ng an toàn khi dung l??ng storage g?n ??y.,Robot ho?t ??ng bình th??ng; ?ã sao l?u d? li?u c?n thi?t; test ???c th?c hi?n trên phân vùng/test directory an toàn; có k? ho?ch d?ng tr??c khi h?t dung l??ng.,Robot; PC/SSH; SSD/eMMC; fio/dd; disk usage tool; log viewer.,"1. Ki?m tra và ghi dung l??ng tr?ng ban ??u.
+2. Ch? s? d?ng test directory ho?c phân vùng ???c phê duy?t.
+3. T?o d? li?u test ?? dung l??ng tr?ng gi?m d?n ??n ng??ng g?n ??y theo k? ho?ch.
+4. Theo dõi disk usage và system log.
+5. Ki?m tra ?ng d?ng logging x? lý tình tr?ng thi?u dung l??ng nh? th? nào.
+6. Không ?? phân vùng h? th?ng b? ??y ??n m?c gây m?t kh? n?ng kh?i ??ng.
+7. Sau khi ghi nh?n hành vi, d?ng test và xóa d? li?u test.
+8. Ki?m tra robot tr? l?i tr?ng thái bình th??ng.",H? th?ng phát hi?n dung l??ng th?p và x? lý theo thi?t k?; không làm h?ng filesystem ho?c khi?n robot m?t kh? n?ng ho?t ??ng.,Không m?t d? li?u h? th?ng nghiêm tr?ng; không filesystem corruption; không reboot b?t th??ng; c?nh báo/handling ?úng requirement.,1 h,,,,,,Major
+ST-STO-006,Storage I/O Stress,File Integrity After Stress,Ki?m tra file có còn nguyên v?n sau khi storage ch?u I/O stress.,?ã hoàn thành m?t bài I/O stress tr??c ?ó; file test ?ã ???c t?o; robot và storage ho?t ??ng bình th??ng.,Robot; PC/SSH; SSD/eMMC; checksum tool; smartctl; fio/dd; log viewer.,"1. Ch?n các file test ?ã t?o trong bài stress.
+2. T?o checksum/hash cho file tr??c ho?c dùng file có checksum chu?n.
+3. ??c l?i toàn b? ho?c m?u file sau stress.
+4. T?o checksum/hash l?n n?a.
+5. So sánh checksum tr??c và sau.
+6. M? m?t s? file ?? ki?m tra kh? n?ng ??c.
+7. Ki?m tra system log và filesystem error.
+8. Ghi k?t qu? vào test record.",File ??c ???c và checksum không thay ??i ??i v?i d? li?u ph?i ???c b?o toàn.,Không phát hi?n file corruption; checksum kh?p ??i v?i file c?n b?o toàn; không Critical filesystem/I/O error.,4 h,,,,,,Major
+ST-STO-007,Storage I/O Stress,Storage Temperature Stress,?ánh giá nhi?t ?? SSD/eMMC khi storage ho?t ??ng v?i I/O cao.,Robot ho?t ??ng bình th??ng; gi?i h?n nhi?t ?? storage ?ã ???c xác ??nh t? datasheet/requirement; logging b?t.,Robot; PC/SSH; fio; smartctl; thermal camera ho?c telemetry nhi?t ??.,"1. Ghi nhi?t ?? storage ? tr?ng thái idle.
+2. Ch?y workload ??c/ghi cao.
+3. Duy trì 2 gi?.
+4. Ghi nhi?t ?? m?i 5 phút.
+5. ??ng th?i ghi read/write speed và I/O error.
+6. Xác ??nh nhi?t ?? cao nh?t và th?i ?i?m ??t nhi?t ?? ?n ??nh.
+7. D?ng workload.
+8. Ki?m tra nhi?t ?? gi?m và ki?m tra log.",Nhi?t ?? t?ng theo t?i nh?ng n?m trong gi?i h?n; performance không suy gi?m b?t th??ng do nhi?t.,Peak temperature ? gi?i h?n thi?t k?; không thermal shutdown; không Critical I/O error; performance ??t requirement.,2 h,,,,,,Major
+ST-STO-008,Storage I/O Stress,Boot After Heavy I/O,Ki?m tra robot có kh?i ??ng bình th??ng sau khi storage v?a tr?i qua I/O stress.,Robot ?ã hoàn thành m?t bài I/O stress; d? li?u quan tr?ng ?ã ???c ?óng/flush ?úng cách; có th? power cycle an toàn.,Robot; PC/SSH; SSD/eMMC; smartctl; log viewer; màn hình/console.,"1. K?t thúc bài I/O stress ?úng cách.
+2. Ch? storage hoàn t?t ghi d? li?u.
+3. T?t robot theo quy trình chu?n.
+4. Ch? robot t?t hoàn toàn.
+5. B?t robot l?i.
+6. Ghi th?i gian boot và ki?m tra các service quan tr?ng.
+7. Ki?m tra storage mount, filesystem và d? li?u test.
+8. Ki?m tra system log sau khi boot.",Robot boot bình th??ng; storage ???c nh?n di?n và mount; các service quan tr?ng kh?i ??ng.,Không boot failure; không filesystem corruption; không storage detection error; các service quan tr?ng ? tr?ng thái bình th??ng.,30 min,,,,,,Major
+ST-COM-001,Network & Communication Stress,Ethernet 100 Mbps Throughput,Ki?m tra c?ng Ethernet có truy?n d? li?u ?n ??nh ? m?c 100 Mbps.,Robot kh?i ??ng bình th??ng; pin/ngu?n ?? th?i gian test; cáp Ethernet ?úng chu?n; robot ? khu v?c an toàn; không l?i Critical; logging b?t.,Robot; PC; cáp Ethernet; iperf3; ping; công c? xem log.,"1. ??t robot ? v? trí an toàn và ki?m tra E-stop.
+2. C?m cáp Ethernet gi?a robot và PC/switch.
+3. Ki?m tra tr?ng thái link và ghi t?c ?? k?t n?i ban ??u.
+4. Trên PC m? terminal và ch?y iperf3 ? ch? ?? server.
+5. Trên robot ch?y iperf3 client, ??t workload kho?ng 100 Mbps.
+6. Duy trì 30 phút.
+7. M?i 5 phút ghi throughput, latency và l?i k?t n?i.
+8. Ki?m tra robot v?n giao ti?p bình th??ng.
+9. D?ng iperf3 và ki?m tra log.",Ethernet v?n k?t n?i; throughput ?n ??nh quanh m?c m?c tiêu; robot không b? m?t k?t n?i.,Throughput ??t requirement; không disconnect b?t th??ng; không Critical communication error; latency/packet loss trong gi?i h?n requirement.,30 min,,,,,,Major
+ST-COM-002,Network & Communication Stress,Ethernet 1 Gbps Throughput,Ki?m tra kh? n?ng truy?n d? li?u ?n ??nh ? m?c 1 Gbps.,Robot bình th??ng; cáp/switch h? tr? 1 Gbps; ngu?n ??; không l?i Critical; logging b?t.,Robot; PC; cáp Ethernet; switch 1 Gbps n?u c?n; iperf3; ping.,"1. K?t n?i robot v?i PC/switch.
+2. Ki?m tra link speed ph?i h? tr? 1 Gbps.
+3. Ch?y iperf3 server trên PC.
+4. Ch?y iperf3 client trên robot.
+5. Duy trì 30–120 phút theo k? ho?ch.
+6. Ghi throughput và latency m?i 5 phút.
+7. Theo dõi disconnect và error.
+8. D?ng test và ki?m tra log.",Link và communication duy trì ?n ??nh; throughput ??t m?c yêu c?u.,Throughput ??t requirement; không disconnect; không Critical error; latency/packet loss trong gi?i h?n.,30–120 min,,,,,,Major
+ST-COM-003,Network & Communication Stress,Ethernet Maximum Throughput,?ánh giá hi?u n?ng khi Ethernet ho?t ??ng g?n m?c t?i ?a c?a interface.,Robot và thi?t b? m?ng h? tr? t?c ?? c?n test; k?t n?i v?t lý t?t; logging b?t; ?ã xác ??nh gi?i h?n an toàn.,Robot; PC; switch phù h?p; iperf3; ping; monitoring tool.,"1. Ki?m tra link speed.
+2. Ch?y iperf3 v?i 1 stream.
+3. Ghi throughput.
+4. N?u requirement yêu c?u, l?p v?i nhi?u stream.
+5. Duy trì workload theo th?i gian test.
+6. Ghi throughput, CPU và latency.
+7. Ki?m tra error/disconnect.
+8. D?ng workload và ki?m tra log.",Throughput ??t m?c thi?t k?/requirement và robot v?n ho?t ??ng bình th??ng.,Throughput ??t requirement; không Critical communication error; không m?t k?t n?i b?t th??ng.,30–120 min,,,,,,Major
+ST-COM-004,Network & Communication Stress,Ethernet Packet Loss,Ki?m tra t? l? m?t gói khi Ethernet ?ang ch?u t?i.,Robot và PC k?t n?i ?n ??nh; không có l?i m?ng tr??c test; logging b?t.,Robot; PC; iperf3; ping; packet monitoring tool.,"1. Ch?y ping ?? ki?m tra k?t n?i tr??c test.
+2. Ch?y iperf3 t?o traffic.
+3. ??ng th?i ch?y ping v?i s? l??ng gói ?? l?n.
+4. Duy trì 30 phút.
+5. Ghi packet loss và latency m?i 5 phút.
+6. Ki?m tra ?ng d?ng/ROS 2 communication n?u có.
+7. D?ng traffic và l?u k?t qu?.",Packet loss th?p và không làm gián ?o?n ch?c n?ng robot.,Packet loss ? requirement; không disconnect; không Critical communication error.,30 min,,,,,,Major
+ST-COM-005,Network & Communication Stress,Ethernet Latency / Jitter,Ki?m tra ?? tr? và ?? bi?n thiên ?? tr? khi m?ng có t?i.,Robot và PC k?t n?i ?n ??nh; workload m?ng ?ã chu?n b?; logging b?t.,Robot; PC; ping; iperf3; công c? ?o jitter n?u có.,"1. Ch?y ping khi ch?a có traffic ?? l?y baseline.
+2. Ch?y iperf3 t?o traffic n?n.
+3. Ti?p t?c ?o latency/jitter.
+4. Duy trì 30 phút.
+5. Ghi min/average/max latency và jitter theo chu k?.
+6. Ki?m tra robot v?n giao ti?p bình th??ng.
+7. D?ng workload và l?u log.",Latency và jitter không t?ng b?t th??ng khi có t?i.,Latency/jitter n?m trong requirement; không timeout ho?c disconnect ngoài d? ki?n.,30 min,,,,,,Major
+ST-COM-006,Network & Communication Stress,CAN 50% Bus Load,Ki?m tra CAN khi bus load kho?ng 50%.,Robot bình th??ng; CAN interface ho?t ??ng; robot ? tr?ng thái an toàn; logging b?t.,Robot; CAN analyzer/interface; PC; CAN traffic generator/monitor.,"1. K?t n?i CAN analyzer.
+2. Ki?m tra CAN ?ang ho?t ??ng bình th??ng.
+3. Ghi bus load và error count ban ??u.
+4. T?o traffic ?? bus load kho?ng 50%.
+5. Duy trì 30 phút.
+6. M?i 5 phút ghi bus load, error frame, dropped frame và tr?ng thái message quan tr?ng.
+7. Ki?m tra ch?c n?ng s? d?ng CAN.
+8. D?ng traffic và ki?m tra log.",CAN truy?n nh?n ?n ??nh ? t?i kho?ng 50%.,Bus load kho?ng 45–55%; error trong gi?i h?n requirement; không bus-off; message quan tr?ng ho?t ??ng bình th??ng.,30 min,,,,,,Major
+ST-COM-007,Network & Communication Stress,CAN 80% Bus Load,Ki?m tra CAN ? t?i cao kho?ng 80%.,CAN ho?t ??ng bình th??ng; ?ã xác ??nh gi?i h?n an toàn; robot ? tr?ng thái an toàn; logging b?t.,Robot; CAN analyzer; PC; CAN traffic generator.,"1. Ghi bus load và error count tr??c test.
+2. T?ng traffic t? t? ??n kho?ng 80%.
+3. Duy trì 30 phút.
+4. Theo dõi bus load, error frame, latency và tr?ng thái node.
+5. Ki?m tra message quan tr?ng.
+6. N?u xu?t hi?n bus-off ngoài d? ki?n, d?ng test và ghi nh?n.
+7. Gi?m traffic v? m?c bình th??ng.
+8. Ki?m tra CAN sau test.",CAN v?n truy?n nh?n message ? t?i cao; h? th?ng không m?t communication ngoài d? ki?n.,Bus load kho?ng 75–85%; không Critical error; không bus-off không h?i ph?c; message quan tr?ng ??t requirement.,30 min,,,,,,Major
+ST-COM-008,Network & Communication Stress,CAN 90–95% Bus Load,Ki?m tra hành vi CAN khi bus g?n bão hòa.,CAN ho?t ??ng bình th??ng; ?ã xác ??nh gi?i h?n an toàn; có cách d?ng traffic ngay; robot ? tr?ng thái an toàn.,Robot; CAN analyzer; CAN traffic generator; PC; log viewer.,"1. Ki?m tra CAN ? tr?ng thái bình th??ng.
+2. T?ng traffic t? t?, không t?ng ??t ng?t.
+3. ??t bus load kho?ng 90–95%.
+4. Duy trì trong th?i gian ???c phê duy?t.
+5. Theo dõi error frame, latency, dropped frame và bus-off.
+6. Ki?m tra message quan tr?ng.
+7. Gi?m traffic v? 0.
+8. Ki?m tra CAN có tr? l?i bình th??ng không.
+9. L?u log.",CAN có hành vi ?úng thi?t k? khi g?n bão hòa; không m?t ki?m soát.,Bus load ??t kho?ng 90–95%; không Critical failure; n?u bus-off x?y ra ph?i recovery ?úng requirement; message quan tr?ng ???c x? lý ?úng.,30 min,,,,,,Major
+ST-COM-009,Network & Communication Stress,CAN Bus-off Recovery,Ki?m tra kh? n?ng phát hi?n và ph?c h?i sau tr?ng thái CAN bus-off.,?ã xác ??nh ph??ng pháp fault injection an toàn; E-stop ho?t ??ng; có quy trình recovery; robot không th?c hi?n nhi?m v? nguy hi?m.,Robot; CAN analyzer; CAN fault/traffic tool; PC; log viewer.,"1. Ki?m tra CAN ho?t ??ng bình th??ng.
+2. Ghi bus state và error counter ban ??u.
+3. Dùng ph??ng pháp fault injection ?? t?o bus-off.
+4. Ghi th?i ?i?m CAN chuy?n sang bus-off.
+5. Quan sát c? ch? auto-recovery ho?c th?c hi?n recovery theo thi?t k?.
+6. Ki?m tra CAN tr? l?i tr?ng thái ho?t ??ng.
+7. G?i/nh?n message ki?m tra.
+8. Ki?m tra system log.",CAN bus-off ???c phát hi?n và ph?c h?i theo thi?t k?; communication ho?t ??ng tr? l?i.,Bus-off ???c phát hi?n; recovery ?úng requirement; không c?n reboot toàn robot n?u thi?t k? không yêu c?u; message sau recovery ?úng.,30–60 min,,,,,,Major
+ST-COM-010,Network & Communication Stress,USB High Traffic,Ki?m tra nhi?u thi?t b? USB truy?n d? li?u ??ng th?i.,Robot có ?? c?ng/b?ng thông USB; thi?t b? USB ho?t ??ng bình th??ng riêng l?; robot an toàn; logging b?t.,Robot; PC; USB devices; USB traffic tool; camera/storage USB n?u có; dmesg/USB monitor.,"1. K?t n?i các thi?t b? USB c?n test.
+2. Ki?m tra t?t c? thi?t b? ???c nh?n di?n.
+3. Ghi tr?ng thái và t?c ?? USB ban ??u.
+4. T?o traffic ??c/ghi ho?c stream d? li?u ??ng th?i.
+5. Duy trì 30–120 phút.
+6. Theo dõi USB disconnect, reset, error và dmesg.
+7. Ki?m tra d? li?u t? t?ng thi?t b?.
+8. D?ng traffic và ki?m tra log.",T?t c? thi?t b? USB duy trì k?t n?i và truy?n d? li?u bình th??ng.,Không disconnect/reset b?t th??ng; không Critical USB error; throughput ??t requirement; không m?t ch?c n?ng quan tr?ng.,30–120 min,,,,,,Major
+ST-COM-011,Network & Communication Stress,Wi-Fi Sustained Traffic,Ki?m tra k?t n?i Wi-Fi ?n ??nh trong th?i gian dài khi có traffic.,Robot k?t n?i ?úng Wi-Fi; tín hi?u ?? m?nh; AP ho?t ??ng bình th??ng; robot an toàn; logging b?t.,Robot; Wi-Fi AP; PC; iperf3; ping; Wi-Fi monitor.,"1. K?t n?i robot v?i ?úng SSID.
+2. Ghi RSSI/signal, IP và latency ban ??u.
+3. Ch?y iperf3 t?o traffic gi?a robot và PC qua Wi-Fi.
+4. Duy trì 30–120 phút.
+5. M?i 5 phút ghi throughput, latency, packet loss và RSSI n?u có.
+6. Ki?m tra robot không m?t Wi-Fi.
+7. D?ng traffic và ki?m tra log.",Wi-Fi duy trì k?t n?i; throughput và latency ?n ??nh; robot không m?t m?ng b?t th??ng.,Không disconnect ngoài requirement; packet loss/latency/throughput ??t requirement; không Critical communication error.,30–120 min,,,,,,Major
+ST-COM-012,Network & Communication Stress,Multi-interface Concurrent,"Ki?m tra Ethernet, CAN, USB và Wi-Fi khi cùng ho?t ??ng v?i traffic cao.",Ethernet/CAN/USB/Wi-Fi ??u ho?t ??ng bình th??ng riêng l?; ngu?n ??; robot ? tr?ng thái an toàn; logging b?t.,Robot; PC; iperf3; ping; CAN analyzer; USB traffic tool; Wi-Fi monitor.,"1. Ki?m tra t?ng interface tr??c test.
+2. K?t n?i Ethernet và Wi-Fi.
+3. T?o Ethernet traffic b?ng iperf3.
+4. T?o CAN traffic theo m?c ???c phê duy?t.
+5. T?o USB read/write ho?c streaming.
+6. Duy trì Wi-Fi traffic ??ng th?i.
+7. Trong 30–120 phút ghi throughput, latency, packet loss, CAN bus load/error, USB disconnect và Wi-Fi status.
+8. Ki?m tra robot v?n giao ti?p v?i các subsystem.
+9. D?ng t?ng workload theo th? t? an toàn.
+10. Ki?m tra system log.",T?t c? interface duy trì ho?t ??ng; không interface nào b? m?t k?t n?i b?t th??ng; robot v?n ho?t ??ng bình th??ng.,Không Critical communication error; không bus-off không h?i ph?c; không USB disconnect b?t th??ng; Ethernet/Wi-Fi throughput và latency ??t requirement.,30–120 min,,,,,,Major
+ST-SEN-001,Sensor Stress,Single Camera Streaming,Ki?m tra m?t camera có th? truy?n hình ?nh liên t?c trong th?i gian dài mà không m?t k?t n?i ho?c gi?m ch?t l??ng b?t th??ng.,Robot kh?i ??ng bình th??ng; pin ?50%; robot ? khu v?c an toàn; camera ho?t ??ng bình th??ng tr??c test; không l?i Critical; logging b?t.,Robot; camera; PC; ROS 2 tools; công c? xem topic/rate; công c? ?o nhi?t ??.,"1. ??t robot ? tr?ng thái an toàn và ki?m tra E-stop.
+2. K?t n?i PC v?i robot.
+3. B?t camera và ki?m tra hình ?nh ?ang nh?n bình th??ng.
+4. Ki?m tra rate/FPS ban ??u.
+5. Cho camera streaming liên t?c trong 1–4 gi?.
+6. M?i 15 phút ghi FPS/rate, latency, dropped frame/data, nhi?t ?? và connection status.
+7. Ki?m tra topic camera v?n có d? li?u.
+8. Sau khi ?? th?i gian, d?ng streaming.
+9. Ki?m tra log và ghi nh?n l?i.",Camera duy trì rate/FPS; d? li?u liên t?c; không m?t k?t n?i; hình ?nh/d? li?u h?p l?.,Dropped data và latency trong requirement; không disconnect b?t th??ng; không sensor node crash.,1–4 h,,,,,,Major
+ST-SEN-002,Sensor Stress,Multi-Camera Streaming,Ki?m tra nhi?u camera ch?y ??ng th?i trong th?i gian dài.,Robot bình th??ng; t?t c? camera c?n test ho?t ??ng riêng l?; ngu?n ??; robot an toàn; logging b?t.,Robot; nhi?u camera; PC; ROS 2 tools; monitoring/temperature tool.,"1. Ki?m tra t?ng camera ho?t ??ng bình th??ng tr??c test.
+2. B?t t?t c? camera c?n test.
+3. Ki?m tra FPS/rate c?a t?ng camera.
+4. Cho t?t c? camera streaming ??ng th?i trong 1–4 gi?.
+5. M?i 15 phút ghi FPS t?ng camera, latency, dropped frame và connection status.
+6. Ki?m tra không camera nào b? disconnect.
+7. Ki?m tra CPU/GPU/RAM n?u camera làm t?ng workload.
+8. D?ng streaming và ki?m tra log.",T?t c? camera duy trì stream; d? li?u t? t?ng camera h?p l?; không disconnect b?t th??ng.,"FPS/rate, latency và dropped data c?a t?ng camera trong requirement; không camera node crash/disconnect.",1–4 h,,,,,,Major
+ST-SEN-003,Sensor Stress,High-Resolution Camera Stress,Ki?m tra camera ? ?? phân gi?i cao có ho?t ??ng ?n ??nh trong th?i gian dài.,Camera h? tr? ?? phân gi?i c?n test; robot an toàn; ngu?n ??; logging b?t.,Robot; camera; PC; ROS 2 tools; monitoring tool.,"1. Ch?n ?? phân gi?i cao theo c?u hình yêu c?u.
+2. B?t camera và ki?m tra hình ?nh.
+3. Ghi FPS/rate, latency và nhi?t ?? ban ??u.
+4. Cho camera streaming liên t?c 1–4 gi?.
+5. M?i 15 phút ghi FPS, dropped frame/data, latency và nhi?t ??.
+6. Ki?m tra camera không t? restart ho?c disconnect.
+7. D?ng streaming và ki?m tra log.",Camera duy trì ?úng ?? phân gi?i và rate; không m?t k?t n?i; d? li?u h?p l?.,Dropped data và latency trong requirement; không disconnect/restart b?t th??ng; nhi?t ?? trong gi?i h?n thi?t k?.,1–4 h,,,,,,Major
+ST-SEN-004,Sensor Stress,LiDAR Continuous,Ki?m tra LiDAR có th? ho?t ??ng và truy?n d? li?u liên t?c trong th?i gian dài.,LiDAR ho?t ??ng bình th??ng tr??c test; robot ? khu v?c an toàn; ngu?n ??; logging b?t.,Robot; LiDAR; PC; ROS 2 tools; temperature monitor.,"1. B?t LiDAR và ki?m tra d? li?u point cloud/scan.
+2. Ki?m tra rate ban ??u.
+3. Cho LiDAR ch?y liên t?c 1–4 gi?.
+4. M?i 15 phút ghi rate, latency, dropped data, nhi?t ?? và connection status.
+5. Ki?m tra topic LiDAR v?n có d? li?u.
+6. Ki?m tra không disconnect ho?c node crash.
+7. D?ng LiDAR và ki?m tra log.",LiDAR duy trì ?úng rate; d? li?u scan/point cloud liên t?c và h?p l?.,Dropped data/latency trong requirement; không disconnect b?t th??ng; không node crash.,1–4 h,,,,,,Major
+ST-SEN-005,Sensor Stress,LiDAR High-Rate,Ki?m tra LiDAR khi ch?y ? t?c ?? d? li?u cao.,LiDAR h? tr? c?u hình high-rate; robot an toàn; ngu?n ??; logging b?t.,Robot; LiDAR; PC; ROS 2 tools; monitoring tool.,"1. C?u hình LiDAR ? rate cao theo requirement.
+2. Ki?m tra d? li?u và rate tr??c test.
+3. Ch?y LiDAR liên t?c 1–4 gi?.
+4. M?i 15 phút ghi rate, latency, dropped data và nhi?t ??.
+5. Theo dõi CPU/RAM n?u c?n.
+6. Ki?m tra topic và connection status.
+7. D?ng test và ki?m tra log.",LiDAR duy trì rate cao; d? li?u không b? m?t b?t th??ng; h? th?ng v?n ?n ??nh.,Rate/latency/dropped data trong requirement; không disconnect; không node crash ho?c l?i Critical.,1–4 h,,,,,,Major
+ST-SEN-006,Sensor Stress,IMU Maximum Rate,Ki?m tra IMU ho?t ??ng ?n ??nh ? rate t?i ?a.,IMU ho?t ??ng bình th??ng; robot ??ng yên/an toàn; rate t?i ?a ?ã xác ??nh; logging b?t.,Robot; IMU; PC; ROS 2 tools; monitoring tool.,"1. ??t robot ? tr?ng thái ??ng yên n?u test không yêu c?u chuy?n ??ng.
+2. Ki?m tra IMU ?ang publish bình th??ng.
+3. C?u hình IMU ? maximum rate theo requirement.
+4. Ghi rate và latency ban ??u.
+5. Cho IMU ch?y liên t?c 1–4 gi?.
+6. M?i 15 phút ghi rate, latency, dropped sample và connection status.
+7. Ki?m tra topic IMU không b? d?ng.
+8. D?ng test và ki?m tra log.",IMU duy trì maximum rate; d? li?u liên t?c; không m?t k?t n?i.,Rate/latency/dropped data trong requirement; không disconnect; không IMU node crash.,1–4 h,,,,,,Major
+ST-SEN-007,Sensor Stress,Encoder High-Rate,Ki?m tra d? li?u encoder/joint state ???c c?p nh?t liên t?c ? rate cao.,Robot ? tr?ng thái an toàn; encoder/joint state ho?t ??ng bình th??ng; logging b?t.,Robot; encoder/joint state; PC; ROS 2 tools; monitoring tool.,"1. Ki?m tra encoder/joint state ?ang publish.
+2. Ghi rate và latency ban ??u.
+3. C?u hình rate cao theo requirement.
+4. Cho d? li?u ch?y liên t?c 1–4 gi?.
+5. M?i 15 phút ghi rate, latency, dropped data và connection status.
+6. Ki?m tra joint state v?n c?p nh?t.
+7. D?ng test và ki?m tra log.",Encoder/joint state duy trì rate; d? li?u không b? m?t ho?c ng?t b?t th??ng.,Rate/latency/dropped data trong requirement; không disconnect; không node crash.,1–4 h,,,,,,Major
+ST-SEN-008,Sensor Stress,Sensor Timestamp,Ki?m tra timestamp c?a d? li?u sensor có ?n ??nh và ??ng b? ?úng yêu c?u.,Sensor ho?t ??ng bình th??ng; h? th?ng time synchronization ?ã ???c c?u hình; logging b?t.,Robot; camera/LiDAR/IMU/encoder; PC; ROS 2 tools; time monitoring tool.,"1. Ch?n các sensor c?n ki?m tra timestamp.
+2. Ki?m tra clock/time synchronization tr??c test.
+3. Ghi timestamp c?a message t? t?ng sensor.
+4. Cho sensor ch?y liên t?c 1–4 gi?.
+5. L?y m?u timestamp theo chu k?.
+6. So sánh timestamp gi?a các message/sensor theo requirement.
+7. Ghi nh?n timestamp jump, drift ho?c message out-of-order n?u có.
+8. Ki?m tra log.",Timestamp t?ng ?úng th? t? và sai l?ch gi?a các sensor n?m trong gi?i h?n.,Timestamp/clock offset/drift trong requirement; không timestamp b?t th??ng gây ?nh h??ng ch?c n?ng perception.,1–4 h,,,,,,Major
+ST-SEN-009,Sensor Stress,Sensor Dropped-Frame,Ki?m tra và xác ??nh t? l? m?t frame/sample c?a sensor.,Sensor ho?t ??ng bình th??ng; rate ?ã bi?t; logging b?t.,Robot; sensor; PC; ROS 2 tools; topic/rate monitor.,"1. Ghi rate k? v?ng c?a sensor.
+2. B?t sensor và workload liên t?c.
+3. Theo dõi s? message/frame nh?n ???c.
+4. Ghi t?ng s? message k? v?ng và s? message th?c t? trong t?ng kho?ng th?i gian.
+5. Tính ho?c l?y dropped frame/sample rate t? tool.
+6. L?p theo nhi?u m?c trong 1–4 gi?.
+7. Ki?m tra nguyên nhân n?u dropped data t?ng.
+8. L?u log/evidence.",Không có ho?c ch? có t? l? dropped data n?m trong gi?i h?n cho phép.,Dropped data rate ? requirement; không có disconnect; không m?t d? li?u nghiêm tr?ng.,1–4 h,,,,,,Major
+ST-SEN-010,Sensor Stress,Sensor Reconnect,Ki?m tra sensor có th? k?t n?i l?i và ho?t ??ng bình th??ng sau khi b? ng?t k?t n?i.,Sensor ho?t ??ng bình th??ng; ph??ng pháp disconnect/reconnect an toàn ?ã xác ??nh; robot ? tr?ng thái an toàn; logging b?t.,Robot; sensor; PC; ROS 2 tools; log viewer.,"1. Ghi tr?ng thái sensor tr??c test.
+2. Ng?t k?t n?i sensor b?ng ph??ng pháp ???c phê duy?t.
+3. Xác nh?n h? th?ng phát hi?n sensor m?t k?t n?i.
+4. Ghi th?i gian t? lúc disconnect ??n khi h? th?ng phát hi?n.
+5. K?t n?i sensor tr? l?i.
+6. Ghi th?i gian sensor xu?t hi?n l?i và b?t ??u publish d? li?u.
+7. Ki?m tra rate/data sau reconnect.
+8. L?p l?i theo s? l?n yêu c?u.
+9. Ki?m tra log.",H? th?ng phát hi?n disconnect và sensor reconnect thành công; d? li?u tr? l?i bình th??ng.,Reconnect trong th?i gian requirement; không c?n reboot ngoài thi?t k?; d? li?u/rate sau reconnect ??t requirement.,1–4 h,,,,,,Major
+ST-SEN-011,Sensor Stress,All Sensors Concurrent,Ki?m tra t?t c? camera/LiDAR/IMU/encoder ho?t ??ng ??ng th?i.,T?ng sensor ?ã pass test c? b?n; robot ? khu v?c an toàn; ngu?n ??; logging b?t.,Robot; camera/LiDAR/IMU/encoder theo c?u hình; PC; ROS 2 tools; monitoring tool.,"1. Ki?m tra t?ng sensor tr??c test.
+2. B?t t?t c? sensor cùng lúc.
+3. Ki?m tra topic/rate c?a t?ng sensor.
+4. Cho t?t c? sensor ch?y ??ng th?i 1–4 gi?.
+5. M?i 15 phút ghi rate, latency, dropped data, nhi?t ?? và connection status.
+6. Theo dõi CPU/GPU/RAM n?u có workload perception.
+7. Ki?m tra không sensor nào disconnect ho?c node crash.
+8. D?ng test và ki?m tra log.",T?t c? sensor duy trì ho?t ??ng; d? li?u h?p l?; không có sensor disconnect b?t th??ng.,Rate/latency/dropped data c?a các sensor trong requirement; không Critical sensor error; không node crash.,1–4 h,,,,,,Major
+ST-SEN-012,Sensor Stress,Sensor + SLAM + AI,"Ki?m tra workload perception th?c t? khi sensor, SLAM và AI ch?y ??ng th?i.",T?t c? sensor ho?t ??ng; SLAM và AI ?ã ???c ki?m tra riêng; robot ? khu v?c di chuy?n an toàn; logging b?t.,Robot; camera/LiDAR/IMU/encoder; ROS 2; SLAM; AI application; PC.,"1. Ki?m tra t?t c? sensor ?ang ho?t ??ng.
+2. Kh?i ??ng SLAM và ki?m tra tr?ng thái.
+3. Kh?i ??ng AI perception/inference.
+4. Cho robot th?c hi?n workload/k?ch b?n di chuy?n an toàn.
+5. Duy trì 1–4 gi? theo k? ho?ch.
+6. M?i 15 phút ghi sensor rate, latency, dropped data, CPU/GPU/RAM và connection status.
+7. Ki?m tra SLAM không m?t tracking và AI không crash.
+8. Ki?m tra sensor topics v?n có d? li?u.
+9. D?ng workload và ki?m tra log.","Sensor, SLAM và AI cùng ho?t ??ng ?n ??nh; d? li?u sensor ??y ??; không crash.",Dropped data/latency trong requirement; không sensor disconnect; không SLAM/AI critical crash; KPI perception ??t requirement.,1–4 h,,,,,,Major
+ST-MOT-001,Motor / Actuator Stress,Joint Position Cycling,Ki?m tra actuator có th? l?p l?i các v? trí yêu c?u ?n ??nh trong th?i gian dài.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c test an toàn; E-stop ho?t ??ng; không l?i Critical; ?ã b?t logging; profile v? trí.,Robot; actuator tool; power analyzer; thermal camera; oscilloscope n?u c?n; PC.,"1. ??t robot/kh?p c?n test ? tr?ng thái an toàn.
+2. Ki?m tra E-stop và ghi dòng/nhi?t ?? ban ??u.
+3. Xác nh?n profile v? trí (ví d? A ? B ? A).
+4. Ch?y profile v?i t?c ??/t?i an toàn.
+5. L?p liên t?c trong th?i gian test.
+6. M?i 5–15 phút ghi position command, position actual, position error, current, temperature và communication status.
+7. Ki?m tra actuator không rung, k?t ho?c phát c?nh báo.
+8. Sau khi ?? th?i gian, d?ng profile.
+9. Ki?m tra log và tr?ng thái actuator.",Actuator hoàn thành các chu k?; v? trí th?c t? bám v? trí yêu c?u; không over-current/over-temp.,Không Critical fault; current và temperature trong gi?i h?n; position error ? requirement; không m?t communication.,30 min–24 h,,,,,,Major
+ST-MOT-002,Motor / Actuator Stress,Joint Velocity Cycling,Ki?m tra actuator ho?t ??ng ?n ??nh khi thay ??i t?c ?? theo profile.,Robot an toàn; profile t?c ??; pin ?50%; E-stop ho?t ??ng; logging b?t.,Robot; actuator tool; power analyzer; thermal camera; PC; oscilloscope n?u c?n.,"1. Ki?m tra actuator ? tr?ng thái bình th??ng.
+2. Ghi t?c ??, current và nhi?t ?? ban ??u.
+3. Ch?n profile t?c ?? th?p ? cao ? th?p theo requirement.
+4. Ch?y l?p profile trong th?i gian test.
+5. Theo dõi actual velocity, current, temperature, position error và communication.
+6. Ghi thông s? theo chu k?.
+7. Ki?m tra không có rung, k?t ho?c fault.
+8. D?ng test và ki?m tra log.",Actuator thay ??i t?c ?? ?úng profile và v?n ?i?u khi?n ?n ??nh.,Velocity/position error trong requirement; current/temperature trong gi?i h?n; không Critical fault ho?c communication loss.,30 min–24 h,,,,,,Major
+ST-MOT-003,Motor / Actuator Stress,High Torque / Load,Ki?m tra actuator ch?u ???c t?i/mô-men cao theo gi?i h?n thi?t k?.,?ã xác ??nh t?i/mô-men t?i ?a cho phép; robot ???c c? ??nh/an toàn; pin ?50%; E-stop ho?t ??ng; logging b?t.,Robot; actuator/load fixture; power analyzer; torque measurement n?u có; thermal camera; PC.,"1. Xác nh?n giá tr? t?i/mô-men m?c tiêu và gi?i h?n an toàn.
+2. Ghi current, torque và temperature ban ??u.
+3. T?ng t?i t? t? ??n m?c m?c tiêu, không t?ng ??t ng?t.
+4. Duy trì t?i theo th?i gian ???c phê duy?t.
+5. Theo dõi current, torque, temperature, position error và fault.
+6. N?u xu?t hi?n over-current/over-temp ho?c d?u hi?u c? khí b?t th??ng, d?ng test.
+7. Gi?m t?i t? t?.
+8. Ki?m tra actuator và log sau test.",Actuator ch?u t?i m?c tiêu mà không v??t gi?i h?n; chuy?n ??ng/gi? v? trí ?n ??nh.,Current/torque/temperature ? gi?i h?n thi?t k?; không Critical fault; position error ??t requirement.,30 min–24 h,,,,,,Major
+ST-MOT-004,Motor / Actuator Stress,Low Torque / Load,Ki?m tra actuator ho?t ??ng ?n ??nh khi t?i th?p.,Robot an toàn; profile t?i th?p ?ã xác ??nh; pin ?50%; E-stop ho?t ??ng; logging b?t.,Robot; actuator tool; power analyzer; thermal camera; PC.,"1. Ghi current và temperature khi actuator ch?a ch?y.
+2. C?u hình t?i th?p theo requirement.
+3. Ch?y actuator theo profile chuy?n ??ng ?ã phê duy?t.
+4. Duy trì/l?p trong th?i gian test.
+5. Theo dõi current, position error, temperature và communication.
+6. Ki?m tra actuator không rung b?t th??ng ho?c m?t ?i?u khi?n.
+7. D?ng test và ki?m tra log.",Actuator ho?t ??ng ?n ??nh ? t?i th?p; không rung/k?t b?t th??ng.,"Position error, current và temperature trong requirement; không Critical fault; communication ?n ??nh.",30 min–24 h,,,,,,Major
+ST-MOT-005,Motor / Actuator Stress,All Joints Concurrent,Ki?m tra t?t c? actuator/joint ho?t ??ng ??ng th?i.,T?ng actuator ?ã ???c ki?m tra riêng; robot ? khu v?c an toàn; pin ?50%; E-stop ho?t ??ng; profile toàn robot ?ã phê duy?t.,Robot; actuator control tool; power analyzer; thermal camera; PC; oscilloscope n?u c?n.,"1. Ki?m tra t?ng joint/actuator không có l?i tr??c test.
+2. B?t profile chuy?n ??ng c?a toàn b? joint.
+3. B?t ??u ? t?c ??/t?i th?p ?? xác nh?n an toàn.
+4. Chuy?n lên profile m?c tiêu.
+5. Theo dõi current, temperature, position error và communication c?a các joint.
+6. Ghi thông s? theo chu k?.
+7. Ki?m tra không joint nào b? fault ho?c m?t communication.
+8. D?ng toàn b? profile và ki?m tra log.",T?t c? joint ho?t ??ng ??ng th?i; không joint nào b? fault; h? th?ng v?n ?i?u khi?n ?n ??nh.,Không Critical fault; current/temperature trong gi?i h?n; position error c?a các joint ??t requirement; communication ?n ??nh.,30 min–24 h,,,,,,Major
+ST-MOT-006,Motor / Actuator Stress,Repeated Start / Stop,Ki?m tra actuator ch?u ???c nhi?u chu k? kh?i ??ng/d?ng.,Robot an toàn; profile start/stop ?ã phê duy?t; E-stop ho?t ??ng; pin ?50%; logging b?t.,Robot; actuator tool; power analyzer; thermal camera; PC.,"1. Ghi current và temperature ban ??u.
+2. Ch?y actuator t? tr?ng thái stop ? chuy?n ??ng ? stop.
+3. L?p chu k? theo s? l?n ho?c th?i gian ???c yêu c?u.
+4. Theo dõi peak current ? m?i l?n start.
+5. Theo dõi temperature và position error theo chu k?.
+6. Ki?m tra không fault, rung ho?c m?t communication.
+7. K?t thúc test và ki?m tra log.",Actuator kh?i ??ng/d?ng l?p l?i bình th??ng; không phát sinh fault b?t th??ng.,Peak current không v??t gi?i h?n; temperature trong gi?i h?n; không Critical fault; actuator v?n ??t position requirement.,30 min–24 h,,,,,,Major
+ST-MOT-007,Motor / Actuator Stress,Motor Thermal Stress,?ánh giá nhi?t ?? motor khi ho?t ??ng liên t?c.,?ã xác ??nh gi?i h?n nhi?t ?? motor; robot an toàn; pin/ngu?n ??; logging b?t.,Robot; actuator tool; thermal camera; temperature telemetry; power analyzer; PC.,"1. Ghi nhi?t ?? motor ? tr?ng thái idle.
+2. Ch?y profile motor ? t?i/t?c ?? ?ã phê duy?t.
+3. Duy trì trong th?i gian test.
+4. Ghi nhi?t ?? m?i 1–5 phút.
+5. ??ng th?i ghi current, torque và position error.
+6. Xác ??nh nhi?t ?? peak và th?i ?i?m ??t steady-state.
+7. D?ng motor n?u ??t gi?i h?n an toàn.
+8. Ki?m tra nhi?t ?? gi?m sau khi d?ng và ki?m tra log.",Nhi?t ?? t?ng theo t?i nh?ng n?m trong gi?i h?n; motor không thermal fault ngoài d? ki?n.,Peak temperature ? gi?i h?n thi?t k?; không thermal shutdown ngoài d? ki?n; current/position error trong requirement.,30 min–24 h,,,,,,Major
+ST-MOT-008,Motor / Actuator Stress,Driver Thermal Stress,?ánh giá nhi?t ?? driver khi ?i?u khi?n actuator liên t?c.,?ã xác ??nh gi?i h?n nhi?t ?? driver; robot an toàn; profile ?ã phê duy?t; logging b?t.,Robot; actuator tool; thermal camera; driver telemetry n?u có; power analyzer; PC.,"1. Ghi nhi?t ?? driver ban ??u.
+2. Ch?y actuator theo profile t?i ?ã phê duy?t.
+3. Duy trì test trong th?i gian yêu c?u.
+4. Ghi nhi?t ?? driver m?i 1–5 phút.
+5. Theo dõi current, fault status và communication.
+6. Xác ??nh peak temperature.
+7. D?ng test n?u v??t gi?i h?n an toàn.
+8. Ki?m tra driver sau test và xem log.",Driver không quá nhi?t; actuator v?n ?i?u khi?n bình th??ng.,Peak driver temperature ? gi?i h?n thi?t k?; không Critical thermal fault; không communication loss.,30 min–24 h,,,,,,Major
+ST-MOT-009,Motor / Actuator Stress,Current Monitoring,Ki?m tra dòng ?i?n c?a actuator trong các tr?ng thái t?i/chuy?n ??ng.,Power measurement ?ã ???c k?t n?i ?úng; gi?i h?n dòng ?ã xác ??nh; robot an toàn; logging b?t.,Robot; power analyzer; multimeter/current probe n?u phù h?p; actuator tool; PC.,"1. Ki?m tra thi?t b? ?o dòng và k?t n?i ?úng.
+2. Ghi current khi actuator idle.
+3. Ch?y chuy?n ??ng/t?i th?p và ghi current.
+4. Ch?y t?i m?c tiêu và ghi average/peak current.
+5. L?p l?i ? các tr?ng thái yêu c?u.
+6. So sánh current ?o ???c v?i gi?i h?n thi?t k?.
+7. Ki?m tra log/fault n?u có peak b?t th??ng.
+8. D?ng test và l?u d? li?u ?o.",Dòng ?i?n phù h?p v?i tr?ng thái ho?t ??ng; peak không v??t gi?i h?n.,Average/peak current trong gi?i h?n thi?t k?; không over-current fault ngoài d? ki?n; d? li?u ?o h?p l?.,30 min–24 h,,,,,,Major
+ST-MOT-010,Motor / Actuator Stress,Position Accuracy After Cycling,Ki?m tra ?? chính xác v? trí sau khi actuator ?ã ch?y nhi?u chu k?.,?ã xác ??nh v? trí chu?n và tolerance; actuator ?ã ???c ch?y cycle test; robot ? tr?ng thái an toàn.,Robot; actuator tool; position measurement tool n?u có; PC; power analyzer.,"1. ?o/ghi v? trí chu?n tr??c khi ch?y cycle.
+2. Ch?y profile position cycling theo s? chu k? yêu c?u.
+3. Sau khi k?t thúc, ??a joint v? các v? trí chu?n.
+4. ?o position actual t?i t?ng v? trí.
+5. Tính/ghi position error.
+6. So sánh v?i k?t qu? tr??c test.
+7. Ki?m tra actuator không có fault và log không có l?i Critical.",V? trí sau cycle v?n n?m trong tolerance; không có sai l?ch b?t th??ng.,Position error sau test ? requirement; không có degradation v??t gi?i h?n; không Critical actuator fault.,30 min–24 h,,,,,,Major
+ST-MOT-011,Motor / Actuator Stress,Communication Under Motion,Ki?m tra CAN/EtherCAT và d? li?u ?i?u khi?n actuator khi robot/joint ?ang chuy?n ??ng.,CAN/EtherCAT ho?t ??ng bình th??ng tr??c test; robot ? khu v?c an toàn; E-stop ho?t ??ng; logging b?t.,Robot; actuator tool; CAN analyzer/EtherCAT monitor; PC; oscilloscope n?u c?n; power analyzer.,"1. Ki?m tra CAN/EtherCAT không có l?i tr??c test.
+2. Ghi bus status/error count ban ??u.
+3. Ch?y profile chuy?n ??ng ?ã phê duy?t.
+4. Trong khi chuy?n ??ng, theo dõi message rate, latency, error frame ho?c communication error.
+5. Ki?m tra position/velocity command v?n ???c c?p nh?t.
+6. Duy trì test theo th?i gian yêu c?u.
+7. D?ng motion an toàn.
+8. Ki?m tra log và communication status sau test.",Communication duy trì ?n ??nh trong khi actuator chuy?n ??ng; command và feedback không b? m?t b?t th??ng.,Không Critical communication error; không bus-off/disconnect ngoài d? ki?n; message rate/latency ??t requirement.,30 min–24 h,,,,,,Major
+ST-MOT-012,Motor / Actuator Stress,Actuator Endurance,?ánh giá ?? b?n ho?t ??ng c?a actuator trong th?i gian dài.,Actuator ?ã pass test c? b?n; profile endurance ?ã phê duy?t; robot an toàn; ngu?n/pin ??; E-stop ho?t ??ng; logging b?t.,Robot; actuator tool; power analyzer; thermal camera; PC; CAN/EtherCAT monitor.,"1. Ki?m tra t?t c? thông s? baseline: current, temperature, position error và communication.
+2. Kh?i ??ng profile endurance.
+3. Ch?y liên t?c ho?c l?p chu k? trong th?i gian 30 phút–24 gi?.
+4. M?i 15 phút ghi current, temperature, position error, torque n?u có và communication status.
+5. Ghi l?i m?i fault, warning, actuator restart ho?c communication loss.
+6. N?u có d?u hi?u quá nhi?t, over-current ho?c c? khí b?t th??ng, d?ng test theo quy trình an toàn.
+7. K?t thúc endurance và ki?m tra actuator.
+8. So sánh thông s? tr??c và sau test.",Actuator hoàn thành th?i gian endurance; không phát sinh l?i nghiêm tr?ng; hi?u n?ng sau test không suy gi?m ngoài gi?i h?n.,Không Critical fault; current/temperature trong gi?i h?n; position error ??t requirement; communication ?n ??nh; không degradation v??t requirement.,30 min–24 h,,,,,,Major
+ST-MOV-001,Motion / Walking Stress,Continuous Standing,Ki?m tra robot có th? ??ng yên liên t?c trong th?i gian dài mà không m?t th?ng b?ng ho?c phát sinh l?i.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c test an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Robot; khu v?c test an toàn; b? m?t test; camera/video; IMU/log; nhi?t ??/power monitoring.,"1. ??t robot trên b? m?t ph?ng, ch?c ch?n và ki?m tra khu v?c xung quanh không có ng??i/v?t c?n nguy hi?m.
+2. Ki?m tra E-stop và ghi tr?ng thái ban ??u: nhi?t ??, công su?t, v? trí.
+3. ??a robot v? t? th? ??ng chu?n.
+4. B?t ??u b? h?n gi? và ghi video.
+5. Duy trì tr?ng thái ??ng trong th?i gian yêu c?u.
+6. Theo dõi robot có nghiêng, tr??t, m?t cân b?ng ho?c fall không.
+7. M?i 5–15 phút ghi temperature, power và position error n?u có.
+8. N?u robot có d?u hi?u m?t an toàn, d?ng test b?ng quy trình an toàn.
+9. K?t thúc test và ki?m tra log.",Robot duy trì t? th? ??ng ?n ??nh trong toàn b? th?i gian test; không fall ngoài tiêu chí.,Không fall ngoài gi?i h?n; không motor fault; temperature/power và position error trong requirement.,30 min–4 h,,,,,,Major
+ST-MOV-002,Motion / Walking Stress,Forward Walking,Ki?m tra robot ?i th?ng ?n ??nh trong th?i gian dài.,Robot bình th??ng; pin ?50%; khu v?c ?i b? ?? r?ng; b? m?t phù h?p; E-stop ho?t ??ng; logging b?t.,Robot; khu v?c test; camera/video; IMU/log; power monitor; ?o kho?ng cách n?u có.,"1. Ki?m tra ???ng ?i th?ng không có v?t c?n nguy hi?m.
+2. Ghi t?c ?? và thông s? ban ??u.
+3. Ch?n t?c ?? ?i th?ng theo requirement.
+4. Cho robot b?t ??u ?i th?ng theo profile.
+5. Theo dõi h??ng ?i, t?c ??, slip/fall và kho?ng cách robot ?i ???c.
+6. M?i 5–15 phút ghi speed, position error, temperature và power.
+7. N?u robot l?ch h??ng ho?c m?t cân b?ng b?t th??ng, d?ng test an toàn.
+8. Sau khi ?? th?i gian, d?ng robot và ki?m tra log.","Robot ?i th?ng ?n ??nh, không fall/slip b?t th??ng và duy trì t?c ?? yêu c?u.",Không fall ngoài gi?i h?n; không motor fault; t?c ?? và position error ??t requirement; communication ?n ??nh.,30 min–4 h,,,,,,Major
+ST-MOV-003,Motion / Walking Stress,Walking + Turning,Ki?m tra robot v?a ?i v?a quay h??ng ?n ??nh.,Robot bình th??ng; khu v?c ?? r?ng; profile ?i + quay ?ã phê duy?t; E-stop ho?t ??ng; logging b?t.,Robot; khu v?c test; camera/video; IMU/log; power monitor.,"1. Ki?m tra khu v?c quay ?? r?ng và an toàn.
+2. Ch?y th? m?t chu k? ?i + quay ? t?c ?? th?p.
+3. Xác nh?n robot hoàn thành chu k? mà không m?t th?ng b?ng.
+4. Ch?y profile ?i th?ng ? quay ? ?i th?ng l?p l?i.
+5. Theo dõi t?c ??, h??ng, position error, slip/fall, temperature và power.
+6. Ghi d? li?u theo chu k?.
+7. K?t thúc profile và ki?m tra log.",Robot ?i và quay ?úng profile; không fall/slip ngoài tiêu chí.,"Không fall ngoài gi?i h?n; không motor fault; t?c ??, h??ng/position error ??t requirement.",30 min–4 h,,,,,,Major
+ST-MOV-004,Motion / Walking Stress,Backward Walking,Ki?m tra robot ?i lùi ?n ??nh.,Robot bình th??ng; khu v?c phía sau thông thoáng; có ng??i giám sát an toàn; E-stop ho?t ??ng; logging b?t.,Robot; khu v?c test; camera/video; IMU/log; power monitor.,"1. Ki?m tra toàn b? vùng phía sau robot không có ng??i/v?t c?n.
+2. Ch?y th? ?i lùi ? t?c ?? th?p.
+3. Xác nh?n robot gi? th?ng b?ng.
+4. Ch?y profile ?i lùi theo requirement.
+5. Theo dõi t?c ??, h??ng, slip/fall, position error, temperature và power.
+6. Ghi d? li?u theo chu k?.
+7. D?ng robot và ki?m tra log.",Robot ?i lùi ?n ??nh và gi? ???c h??ng/t?c ?? yêu c?u.,Không fall ngoài gi?i h?n; không motor fault; t?c ?? và sai s? ??t requirement.,30 min–4 h,,,,,,Major
+ST-MOV-005,Motion / Walking Stress,Low-Friction Walking,Ki?m tra kh? n?ng ?i b? trên b? m?t có h? s? ma sát th?p.,?ã xác ??nh b? m?t test và gi?i h?n an toàn; robot bình th??ng; có ng??i giám sát; E-stop ho?t ??ng; logging b?t.,Robot; b? m?t ma sát th?p; camera/video; IMU/log; power monitor; d?ng c? ?o ?? d?c n?u có.,"1. Ki?m tra b? m?t ma sát th?p ?ã ???c chu?n b? và không có v?t c?n nguy hi?m.
+2. Ghi ?i?u ki?n b? m?t và thông s? robot ban ??u.
+3. Ch?y th? ? t?c ?? th?p.
+4. N?u ?n ??nh, t?ng ??n profile yêu c?u.
+5. Theo dõi slip, b??c chân, h??ng ?i, fall, motor current/temperature n?u có.
+6. Ghi video ?? ?ánh giá hi?n t??ng tr??t.
+7. D?ng test ngay n?u robot m?t ?n ??nh v??t m?c an toàn.
+8. Ki?m tra log sau test.",Robot v?n ?i ???c trên b? m?t ma sát th?p trong gi?i h?n thi?t k?; không fall ngoài tiêu chí.,Không fall ngoài gi?i h?n; không motor fault; t?c ?? và position error ??t requirement; slip n?m trong gi?i h?n.,30 min–4 h,,,,,,Major
+ST-MOV-006,Motion / Walking Stress,Incline Walking,Ki?m tra robot ?i lên d?c ?n ??nh.,?? d?c ?ã xác ??nh; có c? c?u/khu v?c an toàn ?? ng?n robot r?i; E-stop ho?t ??ng; robot bình th??ng; logging b?t.,Robot; ramp/d?c; camera/video; IMU/log; power monitor; ?o ?? d?c.,"1. Ki?m tra góc d?c theo giá tr? yêu c?u.
+2. Ki?m tra c? c?u an toàn ch?ng robot r?i kh?i ramp.
+3. Ch?y th? ? t?c ?? th?p.
+4. Khi ?n ??nh, ch?y profile ?i lên d?c.
+5. Theo dõi t?c ??, slip, position error, temperature và power.
+6. Ghi d? li?u theo chu k?.
+7. N?u robot có d?u hi?u tr??t/r?i, d?ng test an toàn.
+8. Ki?m tra log.",Robot ?i lên d?c ?úng profile và gi? th?ng b?ng.,Không fall ngoài gi?i h?n; không motor fault; t?c ??/sai s? ??t requirement; nhi?t ?? và power trong gi?i h?n.,30 min–4 h,,,,,,Major
+ST-MOV-007,Motion / Walking Stress,Decline Walking,Ki?m tra robot ?i xu?ng d?c và ki?m soát t?c ??.,?? d?c ?ã xác ??nh; khu v?c an toàn; có bi?n pháp ng?n robot tr??t/r?i; E-stop ho?t ??ng; logging b?t.,Robot; ramp/d?c; camera/video; IMU/log; power monitor.,"1. Ki?m tra góc d?c và vùng k?t thúc ???ng d?c.
+2. Ch?y th? ?i xu?ng ? t?c ?? th?p.
+3. Ki?m tra robot không t?ng t?c ho?c tr??t b?t th??ng.
+4. Ch?y profile ?i xu?ng theo requirement.
+5. Theo dõi t?c ??, slip/fall, position error, temperature và power.
+6. Ghi video và log.
+7. D?ng test n?u t?c ?? ho?c ?? tr??t v??t gi?i h?n an toàn.",Robot ?i xu?ng d?c có ki?m soát và không m?t th?ng b?ng.,Không fall ngoài gi?i h?n; không motor fault; t?c ??/sai s? ??t requirement; không tr??t v??t gi?i h?n.,30 min–4 h,,,,,,Major
+ST-MOV-008,Motion / Walking Stress,Obstacle Crossing,Ki?m tra robot có th? v??t v?t c?n theo kích th??c yêu c?u.,Chi?u cao/kích th??c v?t c?n ?ã xác ??nh; robot bình th??ng; khu v?c có bi?n pháp ch?ng fall; E-stop ho?t ??ng; logging b?t.,Robot; v?t c?n test; camera/video; IMU/log; th??c ?o; power monitor.,"1. ?o và ghi kích th??c v?t c?n.
+2. ??t v?t c?n ?úng v? trí trên ???ng ?i.
+3. Ch?y th? ? t?c ?? th?p.
+4. Quan sát chân robot ti?p c?n, b??c qua và r?i kh?i v?t c?n.
+5. L?p theo s? l?n yêu c?u.
+6. Theo dõi fall, slip, position error, temperature và power.
+7. Ghi video t?ng l?n v??t v?t c?n.
+8. Ki?m tra log.",Robot v??t v?t c?n thành công theo profile; không va ch?m nguy hi?m ho?c fall ngoài tiêu chí.,Hoàn thành s? l?n yêu c?u; không fall ngoài gi?i h?n; không motor fault; position error/t?c ?? ??t requirement.,30 min–4 h,,,,,,Major
+ST-MOV-009,Motion / Walking Stress,Repeated Squat / Stand,Ki?m tra robot th?c hi?n squat và ??ng lên l?p l?i ?n ??nh.,"Robot ? khu v?c an toàn, t?t nh?t có c? c?u b?o v? fall; profile squat/stand ?ã phê duy?t; E-stop ho?t ??ng; logging b?t.",Robot; khu v?c test; camera/video; IMU/log; power monitor; thermal monitor.,"1. ??a robot v? t? th? ??ng chu?n.
+2. Ch?y th? m?t chu k? squat ? stand ? t?c ?? th?p.
+3. Xác nh?n robot gi? th?ng b?ng.
+4. L?p chu k? theo s? l?n/th?i gian yêu c?u.
+5. Theo dõi position error, motor temperature, power và fall.
+6. Ghi cycle count và d? li?u theo chu k?.
+7. D?ng test và ki?m tra log.",Robot hoàn thành các chu k? squat/stand; chuy?n ??ng ?n ??nh.,Không fall ngoài gi?i h?n; không motor fault; position error và t?c ?? ??t requirement; nhi?t ??/power trong gi?i h?n.,30 min–4 h,,,,,,Major
+ST-MOV-010,Motion / Walking Stress,Full Motion Cycle,Ki?m tra chu?i chuy?n ??ng t?ng h?p c?a robot trong ?i?u ki?n th?c t?.,T?t c? motion profile thành ph?n ?ã ???c ki?m tra; khu v?c test an toàn; pin/ngu?n ??; E-stop ho?t ??ng; logging b?t.,Robot; khu v?c test; camera/video; IMU/log; power monitor; thermal monitor.,"1. Ki?m tra robot và t?t c? profile chuy?n ??ng.
+2. Th?c hi?n chu?i: ??ng ? ?i ? quay ? ?i lùi ? squat/stand ho?c các ??ng tác ???c yêu c?u.
+3. Ban ??u ch?y m?t chu k? ch?m ?? xác nh?n an toàn.
+4. Ch?y full motion cycle theo k? ho?ch.
+5. Theo dõi speed, fall, slip, position error, temperature và power.
+6. Ghi d? li?u theo chu k?.
+7. Sau khi hoàn thành, ki?m tra t?t c? actuator/motion status và log.",Robot hoàn thành chu?i chuy?n ??ng; không fall ngoài tiêu chí; motion ?n ??nh.,Không Critical motion/motor fault; không fall ngoài gi?i h?n; speed và position error ??t requirement; temperature/power trong gi?i h?n.,30 min–4 h,,,,,,Major
+ST-PWR-001,Power / Battery Stress,Idle Power Consumption,?o công su?t khi robot ? tr?ng thái idle và ki?m tra ngu?n có ?n ??nh không.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry; PC n?u c?n.,"1. ??t robot ? tr?ng thái idle theo yêu c?u c?a s?n ph?m.
+2. Ki?m tra k?t n?i c?a power analyzer/multimeter ?úng c?c và ?úng d?i ?o.
+3. Ghi ?i?n áp battery tr??c test.
+4. Ghi dòng ?i?n và công su?t khi robot idle.
+5. Duy trì tr?ng thái idle 30–120 phút.
+6. Ghi average và peak voltage/current/power theo chu k?.
+7. Theo dõi xem robot có reset, m?t ngu?n ho?c brownout không.
+8. K?t thúc test và ki?m tra log/BMS.",?i?n áp ?n ??nh; công su?t idle không t?ng b?t th??ng; robot không reset.,Voltage/current/power n?m trong gi?i h?n thi?t k?; không brownout/reset ngoài tiêu chí; d? li?u ?o ??y ??.,30–120 min,,,,,,Major
+ST-PWR-002,Power / Battery Stress,Standing Power,?o công su?t khi robot ??ng yên và gi? t? th?.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; logging b?t.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry.,"1. ??a robot v? t? th? ??ng chu?n.
+2. Ki?m tra robot ??ng ?n ??nh tr??c khi ?o.
+3. Ghi voltage/current/power ban ??u.
+4. Duy trì t? th? ??ng trong th?i gian test.
+5. Ghi average và peak current/power theo chu k?.
+6. Theo dõi motor/driver temperature n?u telemetry có.
+7. Ki?m tra robot không reset, m?t th?ng b?ng ho?c báo power fault.
+8. K?t thúc test và l?u log.",Robot ??ng ?n ??nh; ngu?n không s?t b?t th??ng; không reset.,Voltage/current/power trong gi?i h?n thi?t k?; không brownout; không power fault ngoài tiêu chí.,30–120 min,,,,,,Major
+ST-PWR-003,Power / Battery Stress,Walking Power,?o công su?t khi robot ?i b? và ?ánh giá kh? n?ng c?p ngu?n trong chuy?n ??ng.,Robot bình th??ng; khu v?c ?i b? an toàn; pin ?50%; E-stop ho?t ??ng; logging b?t.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry; robot; camera/video.,"1. Ki?m tra ???ng ?i an toàn.
+2. Ghi voltage/current/power khi robot ??ng yên ?? làm baseline.
+3. Ch?y profile ?i b?.
+4. Ghi current/power trong lúc robot b??c ?i.
+5. Theo dõi peak current khi b??c/chuy?n h??ng.
+6. Theo dõi voltage sag và xem có reset/brownout không.
+7. Duy trì test 30–120 phút ho?c theo k? ho?ch.
+8. D?ng robot an toàn và ki?m tra log.",Ngu?n c?p ?? cho chuy?n ??ng; robot ?i ?n ??nh; không reset/brownout.,Voltage/current/power trong gi?i h?n; peak/sag không v??t requirement; không reset/brownout ngoài tiêu chí.,30–120 min,,,,,,Major
+ST-PWR-004,Power / Battery Stress,AI + Sensors Power,?o công su?t khi camera/sensor và AI/perception ho?t ??ng ??ng th?i.,Robot bình th??ng; camera/sensor ho?t ??ng; AI/perception ?ã ki?m tra riêng; pin ?50%; logging b?t.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry; PC; camera/sensor; AI application.,"1. B?t camera và các sensor c?n thi?t.
+2. Ghi voltage/current/power tr??c khi b?t AI.
+3. Kh?i ??ng AI/perception.
+4. Duy trì workload AI + sensors theo th?i gian test.
+5. Ghi average/peak current và power theo chu k?.
+6. Theo dõi battery voltage và nhi?t ?? n?u có.
+7. Ki?m tra AI/sensor không crash do ngu?n.
+8. Ki?m tra có reset/brownout ho?c communication loss không.
+9. D?ng workload và ki?m tra log.",AI và sensor ho?t ??ng ?n ??nh; ngu?n không b? s?t gây l?i.,Voltage/current/power trong gi?i h?n; không brownout/reset; AI và sensor không crash do ngu?n.,30–120 min,,,,,,Major
+ST-PWR-005,Power / Battery Stress,Maximum System Power,?ánh giá công su?t c?c ??i c?a robot khi nhi?u t?i ho?t ??ng ??ng th?i.,?ã xác ??nh profile t?o t?i c?c ??i và gi?i h?n an toàn; pin/ngu?n ??; khu v?c an toàn; E-stop ho?t ??ng.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry; robot; PC; các t?i h? th?ng.,"1. Ki?m tra gi?i h?n voltage/current/power cho phép.
+2. Ghi baseline khi robot idle.
+3. B?t t?ng workload theo th? t? an toàn: motion, sensors, AI ho?c t?i ???c yêu c?u.
+4. ??a h? th?ng ??n tr?ng thái maximum power theo profile ?ã phê duy?t.
+5. Dùng oscilloscope/power analyzer ghi peak voltage, current và power.
+6. Theo dõi battery voltage sag và reset/brownout.
+7. Ch? duy trì m?c c?c ??i trong th?i gian ???c phê duy?t.
+8. Gi?m t?i theo th? t? an toàn và ki?m tra log.",H? th?ng ??t tr?ng thái t?i c?c ??i mà ngu?n v?n ?n ??nh; không reset ngoài d? ki?n.,Peak voltage/current/power không v??t gi?i h?n thi?t k?; không brownout; không Critical power fault.,30–120 min,,,,,,Major
+ST-PWR-006,Power / Battery Stress,Peak Current,?o dòng ?i?n ??nh khi robot th?c hi?n các ho?t ??ng có t?i cao.,Power analyzer/oscilloscope có ?? bandwidth và sampling; k?t n?i ?o ?úng; profile t?i cao ?ã phê duy?t; robot an toàn.,Power analyzer; oscilloscope; current probe/shunt phù h?p; multimeter; BMS telemetry.,"1. Ki?m tra thi?t b? ?o dòng và c?u hình sampling.
+2. Ghi current baseline khi idle.
+3. Ch?y các thao tác t?o peak current theo profile: t?ng t?c, ??ng lên, quay ho?c t?i cao.
+4. Quan sát waveform current trên oscilloscope/power analyzer.
+5. Ghi giá tr? peak và th?i ?i?m x?y ra.
+6. ??ng th?i ghi battery voltage t?i th?i ?i?m peak.
+7. L?p l?i s? l?n yêu c?u ?? xác nh?n tính l?p l?i.
+8. Ki?m tra không có over-current/reset.",Peak current ?o ???c rõ ràng và n?m trong gi?i h?n thi?t k?.,Peak current ? gi?i h?n; waveform không có b?t th??ng nghiêm tr?ng; không over-current fault/reset ngoài tiêu chí.,30–120 min,,,,,,Major
+ST-PWR-007,Power / Battery Stress,Battery Voltage Sag,Ki?m tra m?c s?t ?i?n áp battery khi robot ch?u t?i.,Pin ?50%; battery/BMS ho?t ??ng bình th??ng; profile t?i ?ã xác ??nh; robot an toàn; logging b?t.,Power analyzer; oscilloscope; multimeter; battery/BMS telemetry.,"1. ?o battery voltage khi robot idle.
+2. Ch?y profile t?i ?ã phê duy?t.
+3. Ghi voltage tr??c t?i, trong lúc t?i và ngay sau khi t?i.
+4. Dùng oscilloscope n?u c?n ?? b?t s?t áp nhanh.
+5. Ghi minimum voltage và current t??ng ?ng.
+6. Tính/ghi ?? s?t áp so v?i baseline.
+7. L?p l?i t?i theo yêu c?u.
+8. Ki?m tra có brownout/reset hay không.",Battery voltage có th? gi?m khi t?i t?ng nh?ng không v??t m?c cho phép; robot v?n ho?t ??ng.,Minimum voltage và voltage sag trong gi?i h?n thi?t k?; không brownout/reset ngoài tiêu chí.,30–120 min,,,,,,Major
+ST-PWR-008,Power / Battery Stress,Brownout Protection,Ki?m tra robot phát hi?n và x? lý ?úng khi ?i?n áp ngu?n gi?m xu?ng vùng brownout theo thi?t k?.,?ã xác ??nh ng??ng brownout t? requirement; có ngu?n/thi?t b? mô ph?ng s?t áp ???c phê duy?t; robot ? tr?ng thái an toàn; d? li?u quan tr?ng ?ã l?u.,Power analyzer; programmable power supply/battery simulator n?u ???c phép; oscilloscope; multimeter; BMS telemetry; PC.,"1. Xác nh?n chính xác ng??ng brownout và quy trình recovery.
+2. K?t n?i thi?t b? t?o s?t áp theo s? ?? test ?ã phê duy?t.
+3. Ghi voltage/current tr??c khi test.
+4. Gi?m voltage t? t? ho?c theo profile ???c phê duy?t; không t?o ?i?u ki?n nguy hi?m ngoài k? ho?ch.
+5. Ghi th?i ?i?m h? th?ng phát hi?n brownout và tr?ng thái robot.
+6. Ki?m tra h? th?ng th?c hi?n c? ch? b?o v? ?úng thi?t k?.
+7. ??a voltage tr? l?i m?c bình th??ng.
+8. Ki?m tra robot có recovery/reboot ?úng requirement và d? li?u/h? th?ng có còn an toàn.
+9. Ki?m tra log.","H? th?ng ph?n ?ng ?úng c? ch? brownout; sau khi ngu?n tr? l?i, robot recovery theo thi?t k?.",Brownout ???c phát hi?n ?úng; không gây h? h?ng; recovery/reboot ?úng requirement; không m?t d? li?u nghiêm tr?ng.,30–120 min,,,,,,Major
+ST-THM-001,Thermal Stress,CPU Thermal,Ki?m tra nhi?t ?? CPU khi robot ch?y workload và xác nh?n nhi?t ?? không v??t gi?i h?n thi?t k?.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; logging b?t; ?ã xác ??nh gi?i h?n nhi?t CPU.,Thermal camera; temperature sensor/telemetry; monitoring PC; công c? t?o CPU workload.,"1. ??t robot ? khu v?c an toàn và ki?m tra E-stop.
+2. Ghi nhi?t ?? CPU khi robot ch?a ch?y workload.
+3. B?t workload CPU theo profile.
+4. B?t ??u tính th?i gian test.
+5. Ghi nhi?t ?? CPU m?i 1 phút.
+6. Ghi thêm CPU load và frequency n?u monitoring tool có.
+7. Xác ??nh nhi?t ?? cao nh?t (Peak) và nhi?t ?? ?n ??nh (Steady-state).
+8. Theo dõi c?nh báo thermal và xem robot có t? shutdown/reboot không.
+9. D?ng workload sau khi ?? th?i gian.
+10. Ki?m tra log và ghi k?t qu?.",Nhi?t ?? CPU t?ng theo workload r?i ?n ??nh trong gi?i h?n thi?t k?; robot v?n ho?t ??ng bình th??ng.,Peak CPU temperature ? gi?i h?n thi?t k?; không thermal shutdown ngoài tiêu chí; không Critical error/reboot.,1–8 h,,,,,,Major
+ST-THM-002,Thermal Stress,GPU Thermal,Ki?m tra nhi?t ?? GPU khi GPU ch?y workload cao.,Robot bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; logging b?t; ?ã xác ??nh gi?i h?n nhi?t GPU.,Thermal camera; temperature telemetry; monitoring PC; công c? t?o GPU workload.,"1. Ki?m tra E-stop và khu v?c test.
+2. Ghi nhi?t ?? GPU tr??c khi t?o t?i.
+3. Ch?y GPU workload theo profile ?ã phê duy?t.
+4. Ghi nhi?t ?? GPU m?i 1 phút.
+5. Theo dõi GPU utilization và frequency n?u có.
+6. Xác ??nh Peak và Steady-state temperature.
+7. Ki?m tra thermal warning/throttling/shutdown.
+8. Sau ?? th?i gian, d?ng workload.
+9. Ki?m tra log.",Nhi?t ?? GPU t?ng r?i ?n ??nh trong gi?i h?n; GPU không gây crash ho?c thermal shutdown ngoài d? ki?n.,Peak GPU temperature ? gi?i h?n thi?t k?; không thermal shutdown ngoài tiêu chí; không Critical error/reboot.,1–8 h,,,,,,Major
+ST-THM-003,Thermal Stress,Motor Thermal,Ki?m tra nhi?t ?? motor khi robot th?c hi?n chuy?n ??ng/t?i ???c yêu c?u.,Robot bình th??ng; pin ?50%; khu v?c chuy?n ??ng an toàn; E-stop ho?t ??ng; không l?i Critical; ?ã xác ??nh gi?i h?n nhi?t motor.,Thermal camera; motor temperature telemetry; monitoring PC; robot motion/load profile.,"1. Ki?m tra khu v?c robot chuy?n ??ng an toàn.
+2. Ghi nhi?t ?? t?ng motor c?n theo dõi tr??c test.
+3. Ch?y motion/load profile.
+4. Ghi nhi?t ?? motor m?i 1 phút.
+5. Theo dõi current, speed/torque n?u có.
+6. Xác ??nh motor có nhi?t ?? cao nh?t.
+7. Ki?m tra thermal warning/fault.
+8. D?ng motion n?u motor ??t gi?i h?n an toàn.
+9. Sau test ki?m tra nhi?t ?? gi?m và xem log.",Nhi?t motor t?ng theo t?i r?i ?n ??nh trong gi?i h?n; không thermal fault ngoài d? ki?n.,Peak motor temperature ? gi?i h?n thi?t k?; không thermal shutdown/fault ngoài tiêu chí; không m?t ?i?u khi?n.,1–8 h,,,,,,Major
+ST-THM-004,Thermal Stress,Driver Thermal,Ki?m tra nhi?t ?? driver ?i?u khi?n motor khi ho?t ??ng liên t?c.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; ?ã xác ??nh gi?i h?n nhi?t driver.,Thermal camera; driver temperature telemetry; monitoring PC; motion/load profile.,"1. Ghi nhi?t ?? driver tr??c test.
+2. Ch?y actuator/motion profile theo t?i ?ã phê duy?t.
+3. Ghi nhi?t ?? driver m?i 1 phút.
+4. Theo dõi current và fault status.
+5. Xác ??nh Peak và Steady-state temperature.
+6. Ki?m tra driver có c?nh báo over-temperature không.
+7. D?ng workload n?u ??t gi?i h?n an toàn.
+8. Ki?m tra log sau test.",Driver t?ng nhi?t theo t?i nh?ng v?n trong gi?i h?n; actuator ho?t ??ng bình th??ng.,Peak driver temperature ? gi?i h?n thi?t k?; không thermal shutdown/fault ngoài tiêu chí; không communication loss.,1–8 h,,,,,,Major
+ST-THM-005,Thermal Stress,DC/DC Thermal,Ki?m tra nhi?t ?? b? chuy?n ??i DC/DC khi h? th?ng ho?t ??ng.,Robot bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; ?ã xác ??nh gi?i h?n nhi?t DC/DC; logging b?t.,Thermal camera; temperature sensor/telemetry; monitoring PC; power/load profile.,"1. Xác ??nh v? trí DC/DC c?n ?o.
+2. Ghi nhi?t ?? DC/DC ? tr?ng thái ban ??u.
+3. Ch?y t?i h? th?ng theo profile ?ã phê duy?t.
+4. Ghi nhi?t ?? DC/DC m?i 1 phút.
+5. Theo dõi ?i?n áp vào/ra và dòng n?u telemetry có.
+6. Xác ??nh Peak và Steady-state temperature.
+7. Ki?m tra c?nh báo quá nhi?t và ?? ?n ??nh ngu?n.
+8. D?ng t?i và ki?m tra log.",DC/DC t?ng nhi?t nh?ng ?n ??nh trong gi?i h?n; ?i?n áp ??u ra v?n ?n ??nh.,Peak DC/DC temperature ? gi?i h?n thi?t k?; không thermal shutdown; không l?i ngu?n/?i?n áp ngoài requirement.,1–8 h,,,,,,Major
+ST-THM-006,Thermal Stress,Battery Thermal,Ki?m tra nhi?t ?? battery trong quá trình robot ho?t ??ng và ch?u t?i.,Robot bình th??ng; pin ?50%; khu v?c an toàn; BMS ho?t ??ng; ?ã xác ??nh gi?i h?n nhi?t battery; logging b?t.,Thermal camera; BMS/battery temperature telemetry; monitoring PC; power/load profile.,"1. Ki?m tra BMS ?ang ??c nhi?t ?? battery bình th??ng.
+2. Ghi nhi?t ?? battery tr??c test.
+3. Ch?y workload/power profile.
+4. Ghi nhi?t ?? battery m?i 1 phút.
+5. Ghi thêm battery voltage/current n?u có.
+6. Xác ??nh Peak và Steady-state temperature.
+7. Theo dõi BMS warning, over-temperature ho?c protection event.
+8. D?ng test n?u ??t gi?i h?n an toàn.
+9. Ki?m tra log sau test.",Nhi?t battery t?ng nh?ng n?m trong gi?i h?n; BMS không phát protection ngoài d? ki?n.,Peak battery temperature ? gi?i h?n thi?t k?; không thermal protection ngoài tiêu chí; không Critical battery fault.,1–8 h,,,,,,Major
+ST-THM-007,Thermal Stress,Mainboard Thermal,Ki?m tra nhi?t ?? mainboard khi robot ho?t ??ng v?i workload yêu c?u.,Robot bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; ?ã xác ??nh gi?i h?n nhi?t mainboard; logging b?t.,Thermal camera; board temperature sensors/telemetry; monitoring PC; CPU/GPU workload.,"1. Xác ??nh v? trí c?m bi?n ho?c vùng mainboard c?n theo dõi.
+2. Ghi nhi?t ?? ban ??u.
+3. Ch?y workload h? th?ng theo profile ?ã phê duy?t.
+4. Ghi nhi?t ?? mainboard m?i 1 phút.
+5. Theo dõi CPU/GPU load và các warning liên quan.
+6. Xác ??nh vùng/nhi?t ?? cao nh?t.
+7. Ki?m tra thermal throttling, shutdown ho?c application crash.
+8. D?ng workload và ki?m tra log.",Nhi?t mainboard t?ng r?i ?n ??nh trong gi?i h?n; h? th?ng v?n ho?t ??ng.,Peak mainboard temperature ? gi?i h?n thi?t k?; không thermal shutdown ngoài tiêu chí; không Critical crash/reboot.,1–8 h,,,,,,Major
+ST-THM-008,Thermal Stress,Full Robot Thermal Soak,?ánh giá nhi?t toàn h? th?ng khi nhi?u subsystem ho?t ??ng ??ng th?i trong th?i gian dài.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; không l?i Critical; ?ã xác ??nh gi?i h?n nhi?t c?a các subsystem; logging b?t.,Thermal camera; temperature sensors/telemetry; monitoring PC; CPU/GPU workload; motion/sensor/AI workload.,"1. Ki?m tra t?t c? subsystem c?n ch?y: CPU, GPU, motor, driver, DC/DC, battery, mainboard và sensor/AI n?u có.
+2. Ghi nhi?t ?? baseline c?a các subsystem.
+3. Kh?i ??ng workload theo th? t? an toàn ?ã phê duy?t.
+4. Duy trì full-system workload trong 1–8 gi?.
+5. Ghi nhi?t ?? t?ng subsystem m?i 1 phút.
+6. M?i 15 phút ki?m tra peak temperature, system status, CPU/GPU load và warning/fault.
+7. Xác ??nh subsystem có nhi?t ?? cao nh?t.
+8. Theo dõi thermal throttling/shutdown và ?nh h??ng ??n ch?c n?ng robot.
+9. K?t thúc workload theo th? t? an toàn.
+10. Ki?m tra log và so sánh nhi?t ?? tr??c/sau test.",Các subsystem nóng lên nh?ng ??t tr?ng thái ?n ??nh trong gi?i h?n; robot không m?t ch?c n?ng do nhi?t.,Peak temperature c?a t?ng subsystem ? gi?i h?n thi?t k?; không thermal shutdown ngoài tiêu chí; không Critical fault/reboot; ch?c n?ng robot duy trì.,1–8 h,,,,,,Major
+ST-SYS-001,Full System / Endurance,Full system high load 2h,Ki?m tra toàn b? robot khi CPU/GPU/sensor/AI/motion/logging/communication ho?t ??ng ??ng th?i trong 2 gi?.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; E-stop ho?t ??ng; logging b?t.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. ??t robot ? khu v?c an toàn và ki?m tra E-stop.
+2. Ki?m tra robot không có l?i Critical tr??c test.
+3. Ki?m tra ngu?n/pin và ghi giá tr? ban ??u.
+4. B?t workload th?c t? g?m motion + sensor + AI + logging + communication.
+5. B?t ??u tính gi? 2 gi?.
+6. Theo dõi CPU/GPU, RAM, nhi?t ??, power, network/CAN và tr?ng thái robot.
+7. Ghi các thông s? theo chu k? và ghi ngay m?i warning/error.
+8. Ki?m tra robot v?n th?c hi?n ?úng ch?c n?ng trong su?t bài test.
+9. Sau 2 gi?, d?ng workload theo th? t? an toàn.
+10. Ki?m tra log và các ch?c n?ng chính.","Robot hoàn thành 2 gi?; không crash, reboot, fall ho?c thermal shutdown ngoài tiêu chí; d? li?u và communication v?n ho?t ??ng.",Không Critical failure; không m?t d? li?u nghiêm tr?ng; CPU/GPU/RAM/nhi?t ??/ngu?n/communication và các KPI khác n?m trong requirement.,2 h,,,,,,Major
+ST-SYS-002,Full System / Endurance,Full system high load 4h,Ki?m tra kh? n?ng duy trì workload cao c?a toàn h? th?ng trong 4 gi?.,Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; không l?i Critical; E-stop ho?t ??ng; logging b?t.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra an toàn và tr?ng thái robot tr??c test.
+2. Ghi baseline: ngu?n, nhi?t ?? và tr?ng thái h? th?ng.
+3. B?t motion + sensor + AI + logging + communication.
+4. Duy trì workload liên t?c trong 4 gi?.
+5. Theo dõi CPU/GPU/RAM, nhi?t ??, power, network/CAN và l?i h? th?ng.
+6. Ghi d? li?u theo chu k? ?ã th?ng nh?t.
+7. N?u có warning/error, ghi th?i ?i?m và n?i dung.
+8. Ki?m tra ch?c n?ng robot ??nh k?.
+9. K?t thúc workload an toàn và ki?m tra log.",Robot hoàn thành 4 gi? và v?n ho?t ??ng ?n ??nh.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; không crash/reboot/fall/thermal shutdown ngoài tiêu chí; KPI ??t requirement.,4 h,,,,,,Major
+ST-SYS-003,Full System / Endurance,8h Endurance,?ánh giá ?? b?n ho?t ??ng th?c t? c?a robot trong 8 gi?.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra robot, E-stop và khu v?c test.
+2. Ghi các giá tr? baseline tr??c khi ch?y.
+3. Ch?y workload th?c t? g?m motion + sensor + AI + logging + communication.
+4. Duy trì liên t?c 8 gi?.
+5. Theo dõi nhi?t ??, ngu?n, CPU/GPU/RAM, communication và log.
+6. Ki?m tra ch?c n?ng chính theo chu k?.
+7. Ghi m?i warning/error/fault kèm th?i ?i?m.
+8. K?t thúc test, d?ng workload và ki?m tra robot/log.",Robot hoàn thành 8 gi? mà không x?y ra l?i nghiêm tr?ng ngoài tiêu chí.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI n?m trong requirement; không crash/reboot/fall/thermal shutdown ngoài tiêu chí.,8 h,,,,,,Major
+ST-SYS-004,Full System / Endurance,12h Endurance,?ánh giá ?? ?n ??nh c?a robot trong 12 gi? ho?t ??ng th?c t?.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra tr?ng thái ban ??u và an toàn.
+2. Ghi baseline.
+3. B?t ??y ?? workload th?c t?.
+4. Duy trì trong 12 gi?.
+5. Theo dõi liên t?c ngu?n, nhi?t ??, CPU/GPU/RAM, communication và log.
+6. Ki?m tra ch?c n?ng chính theo chu k?.
+7. Ghi m?i b?t th??ng.
+8. Sau 12 gi? d?ng workload và ki?m tra toàn h? th?ng.",Robot hoàn thành 12 gi?; ch?c n?ng chính và d? li?u v?n ho?t ??ng.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI trong requirement; không crash/reboot/fall/thermal shutdown ngoài tiêu chí.,12 h,,,,,,Major
+ST-SYS-005,Full System / Endurance,24h Endurance,?ánh giá ?? b?n dài h?n trong 24 gi?.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra an toàn và baseline.
+2. Kh?i ??ng workload motion + sensor + AI + logging + communication.
+3. Duy trì trong 24 gi?.
+4. Theo dõi các KPI và log liên t?c.
+5. Ki?m tra ch?c n?ng robot theo chu k?.
+6. Ghi warning/error/fault và th?i ?i?m x?y ra.
+7. Ki?m tra dung l??ng l?u log/d? li?u trong quá trình test.
+8. K?t thúc 24 gi?, d?ng workload an toàn.
+9. Ki?m tra log và tr?ng thái robot.",Robot hoàn thành 24 gi?; không có l?i nghiêm tr?ng ngoài tiêu chí và d? li?u c?n thi?t ???c l?u.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI ??t requirement; không crash/reboot/fall/thermal shutdown ngoài tiêu chí.,24 h,,,,,,Major
+ST-SYS-006,Full System / Endurance,48h Endurance,?ánh giá ?? b?n m? r?ng c?a toàn h? th?ng trong 48 gi?.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra robot và các thi?t b? giám sát.
+2. Ghi baseline.
+3. Ch?y workload th?c t? liên t?c.
+4. Duy trì 48 gi?.
+5. Theo dõi CPU/GPU/RAM, nhi?t ??, ngu?n, communication và log.
+6. Ki?m tra ch?c n?ng chính theo chu k?.
+7. Ghi m?i warning/error/fault.
+8. Ki?m tra d? li?u/log không b? ??y ho?c m?t b?t th??ng.
+9. K?t thúc test và ki?m tra toàn h? th?ng.",Robot hoàn thành 48 gi? và v?n duy trì các ch?c n?ng yêu c?u.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI trong requirement; không crash/reboot/fall/thermal shutdown ngoài tiêu chí.,48 h,,,,,,Major
+ST-SYS-007,Full System / Endurance,72h Endurance,?ánh giá endurance qualification trong 72 gi?.,Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra toàn b? ?i?u ki?n an toàn và baseline.
+2. Kh?i ??ng workload th?c t?.
+3. Duy trì liên t?c 72 gi?.
+4. Theo dõi h? th?ng và ghi KPI theo chu k?.
+5. Ki?m tra ch?c n?ng robot ??nh k?.
+6. Theo dõi dung l??ng storage/log và communication.
+7. Ghi ??y ?? warning/error/fault.
+8. N?u có b?t th??ng, ghi evidence và x? lý theo quy trình ?ã phê duy?t.
+9. K?t thúc test và th?c hi?n ki?m tra t?ng th?.",Robot hoàn thành 72 gi? mà không phát sinh l?i Critical ngoài tiêu chí; h? th?ng và d? li?u v?n ho?t ??ng.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI ??t requirement; không crash/reboot/fall/thermal shutdown ngoài tiêu chí.,72 h,,,,,,Major
+ST-SYS-008,Full System / Endurance,Power + Thermal + Motion Combined,"Ki?m tra ?nh h??ng ??ng th?i gi?a ngu?n, nhi?t và chuy?n ??ng.",Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra ngu?n, nhi?t ?? và tr?ng thái motion tr??c test.
+2. Ghi baseline voltage/current/power và nhi?t ??.
+3. Ch?y motion cùng sensor/AI/communication theo workload th?c t?.
+4. Theo dõi ??ng th?i power, nhi?t ?? và motion status.
+5. Ghi peak/average power, nhi?t ?? và các motion KPI theo chu k?.
+6. Ki?m tra có thermal/power fault ho?c ?nh h??ng ??n motion không.
+7. D?ng workload n?u có d?u hi?u nguy hi?m.
+8. K?t thúc test và ki?m tra log.",Robot v?n th?c hi?n motion ?n ??nh trong khi ngu?n và nhi?t n?m trong gi?i h?n.,Không Critical failure; không m?t d? li?u nghiêm tr?ng; không power/thermal shutdown ngoài tiêu chí; motion và các KPI ??t requirement.,2–72 h,,,,,,Major
+ST-SYS-009,Full System / Endurance,Communication + Sensor + AI Combined,"Ki?m tra ???ng d? li?u khi communication, sensor và AI ho?t ??ng ??ng th?i.",Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t; không l?i Critical.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ki?m tra network/CAN và sensor tr??c test.
+2. Ghi baseline message/rate, sensor data và AI status.
+3. B?t communication + sensor + AI workload ??ng th?i.
+4. Duy trì theo th?i gian test.
+5. Theo dõi message rate, latency, dropped data, CPU/GPU/RAM và nhi?t ??.
+6. Ki?m tra AI v?n nh?n d? li?u sensor và output bình th??ng.
+7. Ghi warning/error/disconnect.
+8. K?t thúc workload và ki?m tra log.","Communication, sensor và AI duy trì ???ng d? li?u ?n ??nh; không m?t d? li?u nghiêm tr?ng.",Không Critical failure; không m?t d? li?u nghiêm tr?ng; KPI communication/sensor/AI ??t requirement; không crash/reboot ngoài tiêu chí.,2–72 h,,,,,,Major
+ST-SYS-010,Full System / Endurance,Post-Endurance Recovery,Ki?m tra tr?ng thái robot sau khi hoàn thành endurance và kh? n?ng tr? l?i tr?ng thái bình th??ng.,Robot ?ã hoàn thành bài endurance t??ng ?ng; không l?i Critical tr??c khi b?t ??u b??c recovery; khu v?c an toàn; logging b?t.,Robot; power analyzer; thermal camera; PC/log server; network/CAN tools.,"1. Ghi tr?ng thái cu?i c?a robot ngay tr??c khi k?t thúc endurance.
+2. D?ng workload theo th? t? an toàn.
+3. Ki?m tra robot có warning/fault còn t?n t?i không.
+4. Ki?m tra nhi?t ?? và ngu?n sau khi d?ng.
+5. Ki?m tra network/CAN và sensor communication.
+6. Ki?m tra system log, application log và d? li?u ?ã ghi.
+7. Th?c hi?n thao tác recovery/kh?i ??ng l?i n?u quy trình s?n ph?m yêu c?u.
+8. Ki?m tra robot tr? l?i tr?ng thái ho?t ??ng bình th??ng.
+9. So sánh các KPI tr??c và sau endurance.",Robot tr? l?i tr?ng thái bình th??ng sau endurance; d? li?u/log còn nguyên và các subsystem ho?t ??ng.,Không Critical failure t?n ??ng; không m?t d? li?u nghiêm tr?ng; recovery ?úng requirement; KPI sau test ??t requirement.,30–60 min,,,,,,Major
+ST-EX-001,System Integration Stress,CPU + RAM + Storage Concurrent,"Ki?m tra tài nguyên tính toán và I/O khi CPU, RAM và Storage cùng ch?u t?i.",Robot kh?i ??ng bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t.,Robot; PC/SSH; power analyzer; thermal camera; ROS 2 tools; CAN/Ethernet tools tùy bài.,"1. K?t n?i PC/SSH v?i robot.
+2. Ki?m tra CPU, RAM, storage và nhi?t ?? tr??c test.
+3. B?t workload CPU + RAM + Storage theo profile ?ã phê duy?t.
+4. Duy trì 2 gi?.
+5. Theo dõi CPU load, RAM usage, swap, storage I/O, nhi?t ?? và log.
+6. Ki?m tra ROS 2/application v?n ho?t ??ng.
+7. Ghi các l?i I/O, OOM, process restart ho?c storage error.
+8. D?ng workload và ki?m tra ch?c n?ng sau test.",Robot hoàn thành workload; h? th?ng v?n ph?n h?i và d? li?u/I/O ho?t ??ng.,Không crash/reboot ngoài d? ki?n; không OOM ho?c storage error nghiêm tr?ng; KPI n?m trong requirement.,2 h,,,,,,Major
+ST-EX-002,System Integration Stress,GPU + Camera + AI Concurrent,"Ki?m tra pipeline perception khi GPU, camera và AI ho?t ??ng ??ng th?i.",Robot bình th??ng; pin ?50%; khu v?c an toàn; E-stop ho?t ??ng; logging b?t.,Robot; PC/SSH; power analyzer; thermal camera; ROS 2 tools; camera; AI application.,"1. Ki?m tra camera ?ang stream bình th??ng.
+2. Ghi FPS/rate, latency, GPU load và nhi?t ?? baseline.
+3. B?t GPU workload cùng camera và AI inference.
+4. Duy trì 2 gi?.
+5. Theo dõi GPU utilization, temperature, FPS, latency và dropped frame.
+6. Ki?m tra AI v?n nh?n d? li?u camera và t?o output.
+7. Ghi m?i camera disconnect, node crash, thermal warning ho?c performance degradation.
+8. D?ng workload và ki?m tra log.",Pipeline camera + GPU + AI ho?t ??ng ?n ??nh; không m?t d? li?u nghiêm tr?ng.,Không crash/reboot ngoài d? ki?n; không camera disconnect; FPS/latency/dropped frame và nhi?t ?? ??t requirement.,2 h,,,,,,Major

@@ -1,0 +1,70 @@
+profile_id: vmo_production_ros2
+enabled: true
+
+connection:
+  host: 192.168.1.21
+  username: vmo-motion-pc
+  port: 22
+
+ros:
+  distro: humble
+  setup_commands:
+    - source /opt/ros/humble/setup.bash
+  production_ros_domain_id: 0
+  isolated_ros_domain_id: 191
+
+container:
+  name: vmo_integration_cont
+  network_mode: host
+
+network:
+  lidar_interface: enp86s0
+  host_cidr: 192.168.1.21/24
+  lidar_ip: 192.168.1.113
+  udp_ports: [56101, 56201, 56301, 56401]
+
+nodes:
+  lidar_publisher: /livox_lidar_publisher
+  slam: null
+
+topics:
+  pointcloud2:
+    name: /lidar/pointcloud/pointcloud2
+    type: sensor_msgs/msg/PointCloud2
+  custom:
+    name: /lidar/pointcloud/custom
+    type: vmo_livox_interface/msg/CustomMsg
+  imu:
+    name: /lidar/imu
+    type: sensor_msgs/msg/Imu
+
+frames:
+  pointcloud: lidar_link
+  imu: null
+  robot_base: null
+
+sampling:
+  topic_rate_duration_sec: 10
+  pointcloud_frame_count: 20
+  timestamp_duration_sec: 300
+  bag_duration_sec: 30
+  bag_root: /tmp/cam_lidar_rosbags
+  production_config_path: /workspace/01_vinmotion/vmo_integration_release/install/share/vmo_config/hardware/vmo_livox_driver_config/config/MID360_config.yaml
+  custom_fields: [offset_time, x, y, z, reflectivity, tag, line]
+
+acceptance:
+  pointcloud_rate_hz: 10
+  pointcloud_rate_tolerance_percent: null
+  imu_rate_hz: 200
+  imu_rate_tolerance_percent: null
+  custom_rate_hz: 10
+  custom_rate_tolerance_percent: null
+  point_count_cv_max: null
+  large_drop_threshold: null
+  duplicate_timestamp_limit: null
+  large_gap_threshold_sec: null
+  maximum_clock_offset_sec: null
+  declared_sync_mechanism: null
+  expected_slam_qos: null
+  vertical_fov_requirement_deg: 59
+  vertical_fov_tolerance_deg: null

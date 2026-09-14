@@ -159,6 +159,63 @@ class LidarStreamRuntimeTest(unittest.TestCase):
         self.assertEqual(self.state.stream_status, LidarStreamStatus.ERROR)
         self.assertIn("disconnected", self.state.last_error.lower())
 
+    def test_valid_point_preview_is_emitted_without_changing_metrics(self):
+        previews = []
+        self.service.point_preview_received.connect(previews.append)
+        self.assertTrue(self.service.start("MID360S"))
+        request_id = self.service.request_id
+        before = self.state.snapshot()
+        payload = {
+            "timestamp": 123456789,
+            "data_type": 1,
+            "count": 2,
+            "points": [
+                [1.0, 2.0, 3.0, 10],
+                [-1.0, -2.0, -3.0, 255],
+            ],
+        }
+
+        self.connection.remote_process_output.emit(
+            request_id,
+            "stdout",
+            "LIVOX_POINT_PREVIEW=" + json.dumps(payload),
+        )
+
+        self.assertEqual(previews, [payload])
+        self.assertEqual(self.state.snapshot(), before)
+
+    def test_malformed_point_preview_is_warned_and_ignored(self):
+        previews = []
+        logs = []
+        self.service.point_preview_received.connect(previews.append)
+        self.service.log.connect(lambda level, message: logs.append((level, message)))
+        self.assertTrue(self.service.start("MID360S"))
+        request_id = self.service.request_id
+        before = self.state.snapshot()
+
+        self.connection.remote_process_output.emit(
+            request_id,
+            "stdout",
+            "LIVOX_POINT_PREVIEW={not-json}",
+        )
+        self.connection.remote_process_output.emit(
+            request_id,
+            "stdout",
+            "LIVOX_POINT_PREVIEW=" + json.dumps({
+                "timestamp": 1,
+                "data_type": 1,
+                "count": 1201,
+                "points": [],
+            }),
+        )
+
+        self.assertEqual(previews, [])
+        self.assertEqual(self.state.snapshot(), before)
+        self.assertEqual(
+            [level for level, _message in logs if level == "WARNING"],
+            ["WARNING", "WARNING"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,10 +101,10 @@ class DashboardPage(QWidget):
 
     DEVICE_TYPES = [
         ("▣", "Camera", 2, False),
-        ("◌", "LiDAR", 3, True),
-        ("⌘", "IMU", 4, False),
-        ("▤", "CAN", 5, False),
-        ("⌘", "EtherCAT", 6, False),
+        ("◌", "LiDAR", 4, True),
+        ("⌘", "IMU", 5, False),
+        ("▤", "CAN", 6, False),
+        ("⌘", "EtherCAT", 7, False),
     ]
 
     AVAILABLE_VALUES = {
@@ -804,7 +804,7 @@ class DashboardPage(QWidget):
             QSizePolicy.Policy.Fixed,
         )
         self.activity_run_button.clicked.connect(
-            lambda: self.navigate_requested.emit(7)
+            lambda: self.navigate_requested.emit(8)
         )
 
         empty_layout.addWidget(empty_title)
@@ -823,19 +823,19 @@ class DashboardPage(QWidget):
         self.quick_run_button = QPushButton("▷  Run test suite")
         self.quick_run_button.setObjectName("PrimaryButton")
         self.quick_run_button.clicked.connect(
-            lambda: self.navigate_requested.emit(7)
+            lambda: self.navigate_requested.emit(8)
         )
 
         self.quick_discover_button = QPushButton("◌  Discover LiDAR")
         self.quick_discover_button.setObjectName("OutlineButton")
         self.quick_discover_button.clicked.connect(
-            lambda: self.navigate_requested.emit(3)
+            lambda: self.navigate_requested.emit(4)
         )
 
         self.quick_reports_button = QPushButton("▤  View reports")
         self.quick_reports_button.setObjectName("OutlineButton")
         self.quick_reports_button.clicked.connect(
-            lambda: self.navigate_requested.emit(10)
+            lambda: self.navigate_requested.emit(11)
         )
 
         self.actions_card.body_layout.addWidget(self.quick_run_button)
