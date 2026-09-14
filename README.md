@@ -1,6 +1,6 @@
-# Hardware Test Automation — LiDAR MVP v0.1.0
+# Hardware Test Automation — Camera and LiDAR v0.1.0
 
-Full source package for the current LiDAR automation foundation.
+Desktop automation for independent Camera and LiDAR device domains.
 
 ## Architecture
 
@@ -32,6 +32,10 @@ Jetson
 - Livox SDK2 Python backend
 - Livox native C++ discovery helper for Jetson
 - MID-360 / MID-360S identification
+- LiDAR discovery and Start/Stop streaming
+- LiDAR live point/IMU metrics and packet-loss monitoring
+- LiDAR automated tests with per-test evidence
+- Camera discovery, streaming, preview, monitoring, and automated tests
 - CLI verification scripts
 - Jetson helper deployment script
 
@@ -39,12 +43,8 @@ Jetson
 
 The UI intentionally does not fake data. These remain placeholders until later milestones:
 
-- point-cloud / IMU stream monitor backend
-- packet-loss calculation
 - firmware/internal parameter reader
-- real ping measurement
-- automatic TestEngine execution
-- evidence/history persistence
+- Camera/global history persistence
 - ROS2/RViz integration
 
 ## Replace an existing project safely

@@ -6,8 +6,14 @@ from threading import Condition, Event
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from core.testing import TestContext, TestEvaluator, TestRunner, TestStatus
-from core.testing.errors import TestCancelledError, TestTimeoutError
+from devices.camera.testing import (
+    TestCancelledError,
+    TestContext,
+    TestEvaluator,
+    TestRunner,
+    TestStatus,
+    TestTimeoutError,
+)
 
 
 class SharedJetsonOperationClient(QObject):

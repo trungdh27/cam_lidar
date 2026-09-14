@@ -280,7 +280,13 @@ class DeviceRegistryDashboardTest(unittest.TestCase):
             page.device_information_button.text(),
             "DEVICE INFORMATION",
         )
-        self.assertEqual(page.test_table.rowCount(), 10)
+        self.assertEqual(page.test_table.rowCount(), 36)
+        ids = [
+            page.test_table.item(row, 1).text()
+            for row in range(page.test_table.rowCount())
+        ]
+        self.assertEqual(sum(value.startswith("LID-") for value in ids), 10)
+        self.assertEqual(sum(value.startswith("TC-") for value in ids), 26)
         self.assertFalse(page.run_test_button.isEnabled())
 
         page.start_stream = Mock()

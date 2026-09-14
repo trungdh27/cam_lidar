@@ -43,9 +43,11 @@ from devices.camera.service import CameraService
 from devices.camera.preview_config import (
     H264_PREVIEW_PORT, PREVIEW_HEIGHT, PREVIEW_MODE, PREVIEW_PORT, PREVIEW_WIDTH,
 )
-from core.testing.definitions import load_definitions
-from core.testing.registry import TestRegistry
-from devices.camera.testing import register_camera_handlers
+from devices.camera.testing import (
+    TestRegistry,
+    load_definitions,
+    register_camera_handlers,
+)
 from desktop_app.workers.camera_test_runner_worker import CameraTestRunnerWorker
 
 

@@ -155,12 +155,32 @@ QPushButton#DangerButton {
     font-weight: 700;
 }
 
-QPushButton#SmallButton {
+QPushButton#WarningButton {
+    background: #FFFAEB;
+    border: 1px solid #F79009;
+    border-radius: 6px;
+    color: #93370D;
+    padding: 9px 16px;
+    font-weight: 700;
+}
+
+QPushButton#WarningButton:hover {
+    background: #FEF0C7;
+}
+
+QPushButton#SmallButton, QToolButton#SmallButton {
     background: #FFFFFF;
     border: 1px solid #D0D5DD;
     border-radius: 6px;
     padding: 6px 10px;
     color: #344054;
+}
+
+QPushButton#SmallButton:checked {
+    background: #EAF2FF;
+    border-color: #155EEF;
+    color: #175CD3;
+    font-weight: 700;
 }
 
 QLineEdit, QComboBox, QSpinBox {
@@ -190,7 +210,84 @@ QHeaderView::section {
     font-weight: 700;
 }
 
-QTextEdit#LiveLog {
+QTabWidget#StressTabs::pane, QTabWidget#StressDetailTabs::pane {
+    border: 1px solid #D8E0EB;
+    background: #FFFFFF;
+}
+
+QTabWidget#StressTabs QTabBar::tab, QTabWidget#StressDetailTabs QTabBar::tab {
+    background: #EEF2F7;
+    border: 1px solid #D8E0EB;
+    padding: 7px 13px;
+    color: #475467;
+    font-weight: 600;
+}
+
+QTabWidget#StressTabs QTabBar::tab:selected, QTabWidget#StressDetailTabs QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #155EEF;
+    border-bottom: 2px solid #155EEF;
+}
+
+QFrame#StressPanel, QFrame#StressFilterBar {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 8px;
+}
+
+QTableWidget#StressTable {
+    selection-background-color: #EAF2FF;
+    selection-color: #101828;
+}
+
+QTableWidget#StressTable::item {
+    padding: 2px 4px;
+}
+
+QLabel#StatusBadge {
+    border-radius: 9px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#StatusBadge[tone="success"] {
+    color: #067647;
+    background: #ECFDF3;
+    border: 1px solid #ABEFC6;
+}
+
+QLabel#StatusBadge[tone="error"] {
+    color: #B42318;
+    background: #FEF3F2;
+    border: 1px solid #FECDCA;
+}
+
+QLabel#StatusBadge[tone="warning"] {
+    color: #B54708;
+    background: #FFFAEB;
+    border: 1px solid #FEDF89;
+}
+
+QLabel#StatusBadge[tone="running"] {
+    color: #175CD3;
+    background: #EFF8FF;
+    border: 1px solid #B2DDFF;
+}
+
+QLabel#StatusBadge[tone="neutral"], QLabel#StatusBadge[tone="stopped"] {
+    color: #475467;
+    background: #F2F4F7;
+    border: 1px solid #D0D5DD;
+}
+
+QTextBrowser#StressRichText {
+    background: #FFFFFF;
+    border: 0;
+    padding: 6px;
+}
+
+QTextEdit#LiveLog, QPlainTextEdit#LiveLog {
     background: #0E1117;
     color: #E6EDF3;
     border: 1px solid #202938;

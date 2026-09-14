@@ -417,6 +417,19 @@ class TestFrameworkTest(unittest.TestCase):
         self._wait(lambda: not service.running)
         self.assertEqual(service.result(definition.id).status, TestStatus.SKIPPED)
 
+    def test_ros2_prerequisite_does_not_trigger_native_discovery_or_stream(self):
+        definition = self._definition(
+            "TC-ROS-UNIT",
+            _PassExecutor,
+            requires_ros2_target=True,
+        )
+        service = self._service([definition])
+        service.start([definition.id], self.context)
+        self._wait(lambda: not service.running)
+        self.assertEqual(service.result(definition.id).status, TestStatus.SKIPPED)
+        self.assertEqual(self.discovery.start_count, 0)
+        self.assertEqual(self.stream.start_count, 0)
+
     def test_threshold_absent_is_measurement_only_skipped(self):
         executor = ImuRateExecutor()
         outcome = executor.evaluate(

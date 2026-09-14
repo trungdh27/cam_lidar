@@ -24,9 +24,12 @@ from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
-from desktop_app.testing.lidar_tests import build_lidar_test_registry
-from desktop_app.testing.test_execution_service import TestExecutionService
+from desktop_app.ui.system_stress_page import SystemStressPage
 from devices.livox.profile import load_default_livox_profile
+from devices.livox.testing import (
+    LidarTestExecutionService,
+    build_lidar_test_registry,
+)
 
 
 class PlaceholderPage(QWidget):
@@ -61,6 +64,7 @@ class MainWindow(QMainWindow):
         ("□", "Evidence"),
         ("▤", "Reports"),
         ("⚙", "Settings"),
+        ("◫", "Stress Test"),
     ]
 
     def __init__(self):
@@ -90,7 +94,7 @@ class MainWindow(QMainWindow):
         self.test_registry = build_lidar_test_registry(
             self.livox_network_profile
         )
-        self.test_execution_service = TestExecutionService(
+        self.test_execution_service = LidarTestExecutionService(
             self.test_registry,
             parent=self,
         )
@@ -124,6 +128,8 @@ class MainWindow(QMainWindow):
         for index, (icon, title) in enumerate(self.NAV_ITEMS):
             button = QPushButton(f"{icon}   {title}")
             button.setObjectName("NavButton")
+            if index == len(self.NAV_ITEMS) - 1:
+                button.setToolTip("System Stress Test")
             button.setCheckable(True)
             button.setMinimumHeight(40)
 
@@ -187,6 +193,14 @@ class MainWindow(QMainWindow):
                     network_profile=self.livox_network_profile,
                 )
                 self.pages.addWidget(self.lidar_page)
+            elif index == len(self.NAV_ITEMS) - 1:
+                self.system_stress_page = SystemStressPage(
+                    remote_service=self.jetson_service,
+                )
+                self.system_stress_page.navigate_requested.connect(
+                    self.navigate_to
+                )
+                self.pages.addWidget(self.system_stress_page)
             else:
                 title, subtitle = placeholders[index]
                 self.pages.addWidget(PlaceholderPage(title, subtitle))
@@ -217,6 +231,10 @@ class MainWindow(QMainWindow):
         if self.test_execution_service.running:
             self.test_execution_service.cancel()
         self.lidar_stream_service.shutdown()
+        if hasattr(self, "lidar_page"):
+            self.lidar_page.shutdown()
+        if hasattr(self, "system_stress_page"):
+            self.system_stress_page.shutdown()
         if (
             hasattr(self, "camera_page")
             and (

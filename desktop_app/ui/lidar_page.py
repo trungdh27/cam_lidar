@@ -10,9 +10,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -22,8 +24,14 @@ from PySide6.QtWidgets import (
 
 from desktop_app.ui.dialogs import (
     LidarDeviceInformationDialog,
-    TestDetailsDialog,
 )
+from desktop_app.ui.lidar_test_dialogs import (
+    LidarGuidedDialogProvider,
+    LidarTestDetailsDialog,
+)
+from desktop_app.ui.lidar_history_dialog import LidarHistoryDialog
+from desktop_app.ui.lidar_pointcloud_page import LidarPointCloudPage
+from desktop_app.ui.lidar_ros2_page import LidarRos2Page
 from desktop_app.services.lidar_discovery_service import (
     LidarDiscoveryService,
 )
@@ -31,20 +39,24 @@ from desktop_app.services.jetson_connection_service import (
     JetsonConnectionService,
 )
 from desktop_app.services.lidar_stream_service import LidarStreamService
+from desktop_app.services.lidar_ros2_service import LidarRos2Service
 from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.state.lidar_runtime_state import (
     LidarRuntimeState,
     LidarStreamStatus,
 )
-from desktop_app.testing.lidar_tests import build_lidar_test_registry
-from desktop_app.testing.test_context import TestContext
-from desktop_app.testing.test_execution_service import TestExecutionService
-from desktop_app.testing.test_result import TestResult
 from desktop_app.ui.widgets import Card, StatusChip
 from devices.livox.profile import (
     LivoxNetworkProfile,
     load_default_livox_profile,
+)
+from devices.livox.testing import (
+    LidarTestContext,
+    LidarTestExecutionService,
+    LidarTestResult,
+    build_lidar_test_registry,
+    load_lidar_ros2_profile,
 )
 
 
@@ -58,9 +70,11 @@ class LidarPage(QWidget):
         stream_service: LidarStreamService,
         discovery_service: LidarDiscoveryService | None = None,
         test_registry=None,
-        test_execution_service: TestExecutionService | None = None,
+        test_execution_service: LidarTestExecutionService | None = None,
         parent=None,
         network_profile: LivoxNetworkProfile | None = None,
+        ros2_target_profile=None,
+        ros2_service=None,
     ):
         super().__init__(parent)
 
@@ -82,8 +96,14 @@ class LidarPage(QWidget):
         )
         self.test_execution_service = (
             test_execution_service
-            or TestExecutionService(self.test_registry, parent=self)
+            or LidarTestExecutionService(self.test_registry, parent=self)
         )
+        self.ros2_target_profile = ros2_target_profile or load_lidar_ros2_profile()
+        self.lidar_ros2_service = ros2_service or LidarRos2Service(
+            self.ros2_target_profile,
+            self,
+        )
+        self.guided_provider = LidarGuidedDialogProvider(self)
         self.livox_device_info = None
         self.network_verification = None
         self.ping_result = None
@@ -102,9 +122,10 @@ class LidarPage(QWidget):
         self.protocol_data = self._profile_protocol_data()
         self.test_case_catalog = self.test_registry.get_tests("lidar")
         self.test_results = {
-            test_case.id: TestResult(test_case.id)
+            test_case.id: LidarTestResult(test_case.id)
             for test_case in self.test_case_catalog
         }
+        self.history_dialog = None
 
         self.discovery_running = False
         self._last_jetson_connected = self.jetson_service.is_connected
@@ -151,6 +172,23 @@ class LidarPage(QWidget):
     def _build_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        section_tabs = QHBoxLayout()
+        section_tabs.setContentsMargins(18, 10, 18, 0)
+        self.monitor_tab_button = QPushButton("MONITOR")
+        self.pointcloud_tab_button = QPushButton("POINT CLOUD")
+        self.ros2_tab_button = QPushButton("ROS2")
+        for button in (
+            self.monitor_tab_button,
+            self.pointcloud_tab_button,
+            self.ros2_tab_button,
+        ):
+            button.setCheckable(True)
+            button.setObjectName("OutlineButton")
+            section_tabs.addWidget(button)
+        section_tabs.addStretch()
+        outer.addLayout(section_tabs)
+
         self.page_scroll = QScrollArea()
         self.page_scroll.setWidgetResizable(True)
         self.page_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -201,7 +239,38 @@ class LidarPage(QWidget):
         root.addWidget(self.log_card)
 
         self.page_scroll.setWidget(self.page_content)
-        outer.addWidget(self.page_scroll)
+        self.pointcloud_page = LidarPointCloudPage(
+            stream_service=self.stream_service,
+            runtime_state=self.runtime_state,
+            parent=self,
+        )
+        self.ros2_page = LidarRos2Page(
+            self.ros2_target_profile,
+            self.lidar_ros2_service,
+            parent=self,
+        )
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.page_scroll)
+        self.content_stack.addWidget(self.pointcloud_page)
+        self.content_stack.addWidget(self.ros2_page)
+        self.content_stack.setCurrentIndex(0)
+        self.monitor_tab_button.setChecked(True)
+        self.monitor_tab_button.clicked.connect(
+            lambda: self._show_lidar_section(0)
+        )
+        self.pointcloud_tab_button.clicked.connect(
+            lambda: self._show_lidar_section(1)
+        )
+        self.ros2_tab_button.clicked.connect(
+            lambda: self._show_lidar_section(2)
+        )
+        outer.addWidget(self.content_stack)
+
+    def _show_lidar_section(self, index: int):
+        self.content_stack.setCurrentIndex(index)
+        self.monitor_tab_button.setChecked(index == 0)
+        self.pointcloud_tab_button.setChecked(index == 1)
+        self.ros2_tab_button.setChecked(index == 2)
 
     def _build_control_card(self):
         card = Card()
@@ -399,17 +468,55 @@ class LidarPage(QWidget):
 
         header.addWidget(title)
         header.addStretch()
+        self.history_button = QPushButton("HISTORY")
+        self.history_button.setObjectName("LidarHistoryButton")
+        self.history_button.clicked.connect(self.show_lidar_history)
+        header.addWidget(self.history_button)
         header.addWidget(self.selected_tests_label)
         self.run_test_button = QPushButton("▶  RUN SELECTED")
         self.run_test_button.setObjectName("PrimaryButton")
         self.run_test_button.clicked.connect(self.run_selected_tests)
         header.addWidget(self.run_test_button)
+        self.cancel_test_button = QPushButton("CANCEL")
+        self.cancel_test_button.setEnabled(False)
+        self.cancel_test_button.clicked.connect(self.test_execution_service.cancel)
+        header.addWidget(self.cancel_test_button)
 
         card.body_layout.addLayout(header)
 
-        self.test_table = QTableWidget(0, 5)
+        filters = QHBoxLayout()
+        self.test_search = QLineEdit()
+        self.test_search.setPlaceholderText("Search by ID or test name")
+        self.test_search.textChanged.connect(self._apply_test_filters)
+        filters.addWidget(self.test_search, 2)
+        self.test_group_filter = QComboBox()
+        self.test_group_filter.addItem("All Groups", None)
+        for group in sorted({item.group for item in self.test_case_catalog}):
+            self.test_group_filter.addItem(group, group)
+        self.test_group_filter.currentIndexChanged.connect(self._apply_test_filters)
+        filters.addWidget(self.test_group_filter)
+        self.test_automation_filter = QComboBox()
+        for label, value in (("All", None), ("Auto", "AUTO"), ("Guided", "GUIDED"), ("Manual", "MANUAL")):
+            self.test_automation_filter.addItem(label, value)
+        self.test_automation_filter.currentIndexChanged.connect(self._apply_test_filters)
+        filters.addWidget(self.test_automation_filter)
+        self.test_status_filter = QComboBox()
+        self.test_status_filter.addItem("All Statuses", None)
+        for status in ("NOT_RUN", "QUEUED", "RUNNING", "PASS", "FAIL", "ERROR", "SKIPPED", "CANCELLED"):
+            self.test_status_filter.addItem(status.replace("_", " ").title(), status)
+        self.test_status_filter.currentIndexChanged.connect(self._apply_test_filters)
+        filters.addWidget(self.test_status_filter)
+        select_visible = QPushButton("Select All Visible")
+        select_visible.clicked.connect(self._select_all_visible)
+        filters.addWidget(select_visible)
+        clear_selection = QPushButton("Clear Selection")
+        clear_selection.clicked.connect(self._clear_test_selection)
+        filters.addWidget(clear_selection)
+        card.body_layout.addLayout(filters)
+
+        self.test_table = QTableWidget(0, 6)
         self.test_table.setHorizontalHeaderLabels(
-            ["Select", "ID", "Group", "Test Case", "Status"]
+            ["Select", "ID", "Group", "Test Case", "Type", "Status"]
         )
         self.test_table.verticalHeader().setVisible(False)
         self.test_table.setAlternatingRowColors(True)
@@ -439,11 +546,23 @@ class LidarPage(QWidget):
             4,
             QHeaderView.ResizeMode.ResizeToContents,
         )
+        table_header.setSectionResizeMode(
+            5,
+            QHeaderView.ResizeMode.ResizeToContents,
+        )
 
         self.test_table.itemChanged.connect(self._update_selected_test_count)
         self.test_table.cellDoubleClicked.connect(self._show_test_details)
         card.body_layout.addWidget(self.test_table)
         return card
+
+    def show_lidar_history(self):
+        if self.history_dialog is None:
+            self.history_dialog = LidarHistoryDialog(parent=self)
+        self.history_dialog.refresh()
+        self.history_dialog.show()
+        self.history_dialog.raise_()
+        self.history_dialog.activateWindow()
 
     def _build_log_card(self):
         card = Card()
@@ -1279,34 +1398,77 @@ class LidarPage(QWidget):
                 + (", ".join(test_case.prerequisites) or "None")
             )
             self.test_table.setItem(row, 3, name_item)
+            self.test_table.setItem(
+                row,
+                4,
+                QTableWidgetItem(test_case.automation_level.value),
+            )
             status = self.test_results[test_id].status.value.replace("_", " ")
-            self.test_table.setItem(row, 4, QTableWidgetItem(status))
+            status_item = QTableWidgetItem(status)
+            status_item.setData(Qt.ItemDataRole.UserRole, self.test_results[test_id].status.value)
+            self.test_table.setItem(row, 5, status_item)
 
         self.test_table.blockSignals(False)
         self._update_selected_test_count()
 
     def _update_selected_test_count(self, *_):
         selected = 0
+        visible = 0
         total = self.test_table.rowCount()
 
         for row in range(total):
+            if not self.test_table.isRowHidden(row):
+                visible += 1
             item = self.test_table.item(row, 0)
             if item and item.checkState() == Qt.CheckState.Checked:
                 selected += 1
 
         self.selected_tests_label.setText(
-            f"{selected} / {total} Selected"
+            f"{selected} Selected · {visible} Visible"
         )
         if self.test_execution_service.running:
-            self.run_test_button.setText("■  STOP TEST")
-            self.run_test_button.setEnabled(True)
+            self.run_test_button.setText("▶  RUN SELECTED")
+            self.run_test_button.setEnabled(False)
+            self.cancel_test_button.setEnabled(True)
         else:
             self.run_test_button.setText("▶  RUN SELECTED")
             self.run_test_button.setEnabled(selected > 0)
+            self.cancel_test_button.setEnabled(False)
+
+    def _apply_test_filters(self, *_):
+        query = self.test_search.text().strip().casefold()
+        group = self.test_group_filter.currentData()
+        automation = self.test_automation_filter.currentData()
+        status = self.test_status_filter.currentData()
+        for row, definition in enumerate(self.test_case_catalog):
+            status_item = self.test_table.item(row, 5)
+            current = status_item.data(Qt.ItemDataRole.UserRole) if status_item else "NOT_RUN"
+            visible = (
+                (not query or query in definition.id.casefold() or query in definition.name.casefold())
+                and (group is None or definition.group == group)
+                and (automation is None or definition.automation_level.value == automation)
+                and (status is None or current == status)
+            )
+            self.test_table.setRowHidden(row, not visible)
+        self._update_selected_test_count()
+
+    def _select_all_visible(self):
+        self.test_table.blockSignals(True)
+        for row in range(self.test_table.rowCount()):
+            if not self.test_table.isRowHidden(row):
+                self.test_table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+        self.test_table.blockSignals(False)
+        self._update_selected_test_count()
+
+    def _clear_test_selection(self):
+        self.test_table.blockSignals(True)
+        for row in range(self.test_table.rowCount()):
+            self.test_table.item(row, 0).setCheckState(Qt.CheckState.Unchecked)
+        self.test_table.blockSignals(False)
+        self._update_selected_test_count()
 
     def run_selected_tests(self):
         if self.test_execution_service.running:
-            self.test_execution_service.cancel()
             return
         selected = []
 
@@ -1320,7 +1482,7 @@ class LidarPage(QWidget):
         if not selected:
             return
 
-        context = TestContext(
+        context = LidarTestContext(
             device="LiDAR",
             jetson_state=self.jetson_state,
             jetson_service=self.jetson_service,
@@ -1341,6 +1503,9 @@ class LidarPage(QWidget):
                 else None
             ),
             ping_result=dict(self.ping_result) if self.ping_result else None,
+            ros2_target_profile=self.ros2_target_profile,
+            lidar_ros2_service=self.lidar_ros2_service,
+            guided_provider=self.guided_provider,
         )
         self.test_execution_service.start(selected, context)
 
@@ -1349,21 +1514,24 @@ class LidarPage(QWidget):
         if row is not None:
             self.test_table.setItem(
                 row,
-                4,
+                5,
                 QTableWidgetItem(status.replace("_", " ")),
             )
+            self.test_table.item(row, 5).setData(Qt.ItemDataRole.UserRole, status)
+        self._apply_test_filters()
 
-    def _on_test_result_ready(self, result: TestResult):
+    def _on_test_result_ready(self, result: LidarTestResult):
         self.test_results[result.test_id] = result
         row = self._test_row(result.test_id)
         if row is not None:
-            status_item = self.test_table.item(row, 4)
+            status_item = self.test_table.item(row, 5)
             if status_item is not None:
                 status_item.setToolTip(
                     f"Duration: {result.duration_sec or 0.0:.3f} s\n"
                     f"Actual: {result.actual_result}\n"
                     f"Evidence: {', '.join(result.evidence) or '-'}"
                 )
+        self._apply_test_filters()
 
     def _on_test_running_changed(self, _running: bool):
         self._update_selected_test_count()
@@ -1388,7 +1556,7 @@ class LidarPage(QWidget):
         if test_id_item is None:
             return
         test_id = test_id_item.text()
-        TestDetailsDialog(
+        LidarTestDetailsDialog(
             self.test_registry.get(test_id),
             self.test_results.get(test_id),
             self,
@@ -1449,6 +1617,12 @@ class LidarPage(QWidget):
 
     def stop_stream(self):
         self.stream_service.stop()
+
+    def shutdown(self):
+        """Stop only resources owned by the LiDAR test page."""
+        if self.test_execution_service.running:
+            self.test_execution_service.cancel()
+        self.lidar_ros2_service.shutdown()
 
     # ------------------------------------------------------------------
     # Log

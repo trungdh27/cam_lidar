@@ -3,8 +3,8 @@ from pathlib import Path
 
 import yaml
 
-from desktop_app.testing.lidar_tests import build_lidar_test_registry
 from devices.livox.profile import load_default_livox_profile
+from devices.livox.testing.lidar_tests import build_lidar_test_registry
 
 
 CATALOG_PATH = (
@@ -71,7 +71,10 @@ class LidarConnectionCatalogTest(unittest.TestCase):
         definitions = registry.get_tests("lidar")
         ids = [item.id for item in definitions]
 
-        self.assertEqual(len(definitions), 10)
+        native = [item for item in definitions if item.id.startswith("LID-")]
+        source = [item for item in definitions if item.id.startswith("TC-")]
+        self.assertEqual(len(native), 10)
+        self.assertEqual(len(source), 26)
         self.assertEqual(
             ids[:3],
             ["LID-CON-001", "LID-CON-002", "LID-CON-003"],

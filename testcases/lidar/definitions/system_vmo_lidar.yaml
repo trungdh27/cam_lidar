@@ -1,0 +1,216 @@
+catalog_id: system_vmo_lidar
+source_csv: ../source/system_vmo_lidar.csv
+source_encoding: cp1252
+device: lidar
+
+# Execution policy is intentionally separate from historical CSV results.
+# The loader requires an exact one-to-one ID match with the source CSV.
+cases:
+  TC-ENV-001:
+    automation_level: AUTO
+    priority: P1
+    timeout: 30
+    executor: ros2_environment
+    requires_ros2_target: false
+    related_existing_tests: [LID-CON-001, LID-CON-002, LID-CON-003]
+    parameters: [host, username, port, lidar_interface, host_cidr, lidar_ip, container_name, lidar_publisher, topics]
+  TC-NET-001:
+    automation_level: AUTO
+    priority: P1
+    timeout: 30
+    executor: ros2_network
+    requires_ros2_target: true
+    related_existing_tests: [LID-CON-001, LID-CON-002, LID-CON-003]
+    parameters: [lidar_interface, host_cidr, lidar_ip, container_name, udp_ports]
+  TC-ROS-001:
+    automation_level: AUTO
+    priority: P1
+    timeout: 45
+    executor: ros2_topics
+    requires_ros2_target: true
+    related_existing_tests: [LID-STR-001, LID-STR-002]
+    parameters: [lidar_publisher, pointcloud2_topic, custom_topic, imu_topic, topic_types]
+  TC-ROS-002:
+    automation_level: AUTO
+    priority: P1
+    timeout: 75
+    executor: ros2_pointcloud_rate
+    requires_ros2_target: true
+    related_existing_tests: [LID-STR-004]
+    parameters: [pointcloud2_topic, sample_duration_sec, pointcloud_rate_tolerance_percent]
+  TC-ROS-003:
+    automation_level: AUTO
+    priority: P1
+    timeout: 75
+    executor: ros2_imu_topic
+    requires_ros2_target: true
+    related_existing_tests: [LID-STR-002, LID-STR-003]
+    parameters: [imu_topic, imu_type, lidar_publisher, sample_duration_sec, imu_rate_tolerance_percent]
+  TC-ROS-004:
+    automation_level: AUTO
+    priority: P1
+    timeout: 30
+    executor: ros2_custom_message
+    requires_ros2_target: true
+    related_existing_tests: []
+    parameters: [custom_topic, custom_type, custom_fields, custom_rate_tolerance_percent]
+  TC-ROS-005:
+    automation_level: AUTO
+    priority: P1
+    timeout: 30
+    executor: ros2_pointcloud_schema
+    requires_ros2_target: true
+    related_existing_tests: []
+    parameters: [pointcloud2_topic, pointcloud2_type, pointcloud_frame, pointcloud_fields]
+  TC-ROS-006:
+    automation_level: AUTO
+    priority: P1
+    timeout: 30
+    executor: ros2_frame_tf
+    requires_ros2_target: true
+    related_existing_tests: []
+    parameters: [pointcloud_frame, imu_frame, robot_base_frame, tf_topics]
+  TC-ROS-007:
+    automation_level: AUTO
+    priority: P1
+    timeout: 90
+    executor: ros2_bag
+    requires_ros2_target: true
+    related_existing_tests: []
+    parameters: [bag_duration_sec, bag_root, production_ros_domain_id, isolated_ros_domain_id, bag_topics]
+  TC-PCD-001:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 900
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-STR-001]
+    parameters: [pointcloud2_topic, pointcloud_frame, observation_duration_sec]
+  TC-PCD-002:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [target_count, target_distance_m, approved_horizontal_coverage]
+  TC-PCD-003:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [required_vertical_fov_deg, official_vertical_fov_tolerance_deg, target_geometry]
+  TC-PCD-004:
+    automation_level: AUTO
+    priority: P2
+    timeout: 90
+    executor: ros2_pointcloud_metrics
+    requires_ros2_target: true
+    related_existing_tests: [LID-STR-004]
+    parameters: [pointcloud2_topic, sample_frame_count, point_count_cv_max, large_drop_threshold]
+  TC-IMU-001:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 900
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-STR-002, LID-STR-003]
+    parameters: [settle_duration_sec, sample_duration_sec, imu_bias_limits, imu_noise_limits, spike_limits]
+  TC-IMU-002:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 900
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-STR-002]
+    parameters: [motion_sequence, axis_convention, baseline_limits, approved_ground_truth]
+  TC-IMU-003:
+    automation_level: AUTO
+    priority: P2
+    timeout: 330
+    executor: ros2_timestamps
+    requires_ros2_target: true
+    related_existing_tests: [LID-TIM-001]
+    parameters: [pointcloud2_topic, imu_topic, sample_duration_sec, duplicate_limit, large_gap_threshold_sec]
+  TC-IMU-004:
+    automation_level: AUTO
+    priority: P2
+    timeout: 30
+    executor: ros2_time_sync
+    requires_ros2_target: true
+    related_existing_tests: [LID-TIM-001]
+    parameters: [declared_sync_mechanism, maximum_clock_offset_sec]
+  TC-ROB-001:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-ROB-001]
+    parameters: [approved_load_command, load_duration_sec, rate_gap_limits, recovery_limits]
+  TC-ROB-002:
+    automation_level: GUIDED
+    priority: P3
+    timeout: 3600
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-ROB-001]
+    parameters: [sample_duration_sec, sample_interval_sec, platform_thermal_limits, warning_patterns]
+  TC-SYS-001:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 9000
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-ROB-001]
+    parameters: [battery_cycle_policy, battery_source, sample_interval_sec, rate_gap_thermal_limits]
+  TC-SYS-002:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: [LID-ROB-001]
+    parameters: [motion_phases, baseline_duration_sec, gap_limits, degradation_limits]
+  TC-SYS-003:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 3600
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [boot_cycle_count, reconnect_timeout_sec, ready_definition, maximum_ready_time_sec]
+  TC-SLAM-001:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 900
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [slam_node, input_topics, output_topics, observation_duration_sec]
+  TC-SLAM-002:
+    automation_level: AUTO
+    priority: P3
+    timeout: 45
+    executor: ros2_slam_qos
+    requires_ros2_target: true
+    related_existing_tests: []
+    parameters: [slam_node, slam_inputs, expected_qos]
+  TC-SLAM-003:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [rotation_deg, slam_output_topics, official_drift_limits, tracking_criteria]
+  TC-SLAM-004:
+    automation_level: GUIDED
+    priority: P4
+    timeout: 1800
+    executor: guided
+    requires_ros2_target: false
+    related_existing_tests: []
+    parameters: [dynamic_object_scenario, loss_limits, artifact_limits, recovery_limits]
