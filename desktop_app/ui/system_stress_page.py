@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,8 +22,11 @@ from PySide6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyleOptionButton,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -143,6 +145,55 @@ class SortableTableItem(QTableWidgetItem):
         if isinstance(other, SortableTableItem):
             return self.sort_value < other.sort_value
         return super().__lt__(other)
+
+
+class CheckBoxHeader(QHeaderView):
+    """Compact select-all checkbox for the first table column."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self._check_state = Qt.CheckState.Unchecked
+
+    def setCheckState(self, state: Qt.CheckState) -> None:
+        if self._check_state == state:
+            return
+        self._check_state = state
+        self.updateSection(0)
+
+    def checkState(self) -> Qt.CheckState:
+        return self._check_state
+
+    def paintSection(self, painter, rect, logical_index: int) -> None:
+        super().paintSection(painter, rect, logical_index)
+        if logical_index != 0:
+            return
+        option = QStyleOptionButton()
+        indicator = self.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator, option, self
+        )
+        option.rect = indicator.translated(
+            rect.center().x() - indicator.center().x(),
+            rect.center().y() - indicator.center().y(),
+        )
+        option.state = QStyle.StateFlag.State_Enabled
+        if self._check_state == Qt.CheckState.Checked:
+            option.state |= QStyle.StateFlag.State_On
+        elif self._check_state == Qt.CheckState.PartiallyChecked:
+            option.state |= QStyle.StateFlag.State_NoChange
+        else:
+            option.state |= QStyle.StateFlag.State_Off
+        self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+
+    def mousePressEvent(self, event) -> None:
+        if self.logicalIndexAt(event.position().toPoint()) == 0:
+            checked = self._check_state != Qt.CheckState.Checked
+            self.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            self.toggled.emit(checked)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class StressEvidenceViewer(QWidget):
@@ -426,12 +477,13 @@ class PreTestEnvironmentPage(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(6)
         summary = QFrame()
         summary.setObjectName("StressPanel")
+        summary.setMaximumHeight(46)
         summary_layout = QHBoxLayout(summary)
-        summary_layout.setContentsMargins(12, 8, 12, 8)
-        summary_layout.setSpacing(12)
+        summary_layout.setContentsMargins(10, 5, 10, 5)
+        summary_layout.setSpacing(9)
         summary_layout.addWidget(QLabel("READINESS"))
         self.readiness_label = StatusBadge("NOT CHECKED")
         summary_layout.addWidget(self.readiness_label)
@@ -447,8 +499,10 @@ class PreTestEnvironmentPage(QWidget):
 
         baseline_panel = QFrame()
         baseline_panel.setObjectName("StressPanel")
+        baseline_panel.setMaximumHeight(82)
         baseline_layout = QVBoxLayout(baseline_panel)
-        baseline_layout.setContentsMargins(10, 6, 10, 6)
+        baseline_layout.setContentsMargins(10, 5, 10, 6)
+        baseline_layout.setSpacing(4)
         baseline_header = QHBoxLayout()
         baseline_title = QLabel("SYSTEM BASELINE")
         baseline_title.setObjectName("CardTitle")
@@ -457,11 +511,19 @@ class PreTestEnvironmentPage(QWidget):
         baseline_header.addWidget(self.baseline_status)
         baseline_header.addStretch()
         baseline_layout.addLayout(baseline_header)
-        self.baseline_summary = QPlainTextEdit()
-        self.baseline_summary.setReadOnly(True)
-        self.baseline_summary.setMaximumHeight(170)
-        self.baseline_summary.setPlainText("Run baseline checks to measure the current DUT operating state.")
-        baseline_layout.addWidget(self.baseline_summary)
+        baseline_row = QHBoxLayout()
+        baseline_row.setSpacing(10)
+        self.baseline_summary = QLabel()
+        self.baseline_summary.setObjectName("Muted")
+        self.baseline_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._baseline_summary_text = "Run baseline checks to measure the current DUT operating state."
+        self.baseline_summary.setToolTip(self._baseline_summary_text)
+        self.baseline_summary.setText(self._baseline_summary_text)
+        self.run_baseline_button = _button("RUN BASELINE", "PrimaryButton")
+        self.run_baseline_button.clicked.connect(self.run_checks)
+        baseline_row.addWidget(self.baseline_summary, 1)
+        baseline_row.addWidget(self.run_baseline_button)
+        baseline_layout.addLayout(baseline_row)
         root.addWidget(baseline_panel)
 
         self.dut_label = QLabel("DUT INFORMATION\nNot checked", self)
@@ -489,8 +551,7 @@ class PreTestEnvironmentPage(QWidget):
         self.check_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.check_table.currentCellChanged.connect(self._show_check_detail)
         self.check_table.itemSelectionChanged.connect(self._update_action_hierarchy)
-        checks_layout.addWidget(self.check_table)
-        checks_layout.addStretch(1)
+        checks_layout.addWidget(self.check_table, 1)
 
         detail_panel = QFrame()
         detail_panel.setObjectName("StressPanel")
@@ -524,9 +585,10 @@ class PreTestEnvironmentPage(QWidget):
 
         content_splitter.addWidget(checks_panel)
         content_splitter.addWidget(detail_panel)
-        content_splitter.setStretchFactor(0, 3)
-        content_splitter.setStretchFactor(1, 2)
-        content_splitter.setSizes([720, 430])
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.setStretchFactor(0, 63)
+        content_splitter.setStretchFactor(1, 37)
+        content_splitter.setSizes([760, 440])
         root.addWidget(content_splitter, 1)
 
         actions = QHBoxLayout()
@@ -534,15 +596,13 @@ class PreTestEnvironmentPage(QWidget):
         self.run_selected_button = _button("RUN SELECTED")
         self.run_selected_button.setEnabled(False)
         self.export_button = _button("EXPORT BASELINE")
-        self.view_details_button = _button("VIEW DETAILS")
         self.override_button = _button("OVERRIDE AND CONTINUE", "WarningButton")
         self.override_button.setVisible(False)
         self.run_all_button.clicked.connect(self.run_checks)
         self.run_selected_button.clicked.connect(self.run_checks)
         self.export_button.clicked.connect(self.open_baseline)
-        self.view_details_button.clicked.connect(self.show_environment_details)
         self.override_button.clicked.connect(self.apply_override)
-        for button in (self.run_all_button, self.run_selected_button, self.export_button, self.view_details_button, self.override_button):
+        for button in (self.run_all_button, self.run_selected_button, self.export_button, self.override_button):
             actions.addWidget(button)
         actions.addStretch()
         root.addLayout(actions)
@@ -590,6 +650,7 @@ class PreTestEnvironmentPage(QWidget):
         output_dir = self.session_manager.pretest_dir()
         self.readiness_label.set_status("RUNNING")
         self.run_all_button.setEnabled(False)
+        self.run_baseline_button.setEnabled(False)
         if self.remote_service is not None:
             if getattr(self.remote_service, "is_connected", False):
                 operation = lambda ssh: PreTestEnvironmentRunner.remote_operation(ssh, self.required_dependencies)
@@ -623,6 +684,7 @@ class PreTestEnvironmentPage(QWidget):
         self.result = result
         self.override = False
         self.run_all_button.setEnabled(True)
+        self.run_baseline_button.setEnabled(True)
         self.session_manager.update_environment(result.status, result.blocking_reasons)
         self._render(result)
         self.result_changed.emit(result)
@@ -633,6 +695,7 @@ class PreTestEnvironmentPage(QWidget):
         self.reason_label.setToolTip(error)
         self.detail_area.setPlainText(error)
         self.run_all_button.setEnabled(True)
+        self.run_baseline_button.setEnabled(True)
 
     def _render(self, result: ReadinessResult) -> None:
         if self.selected_test_ids:
@@ -652,7 +715,7 @@ class PreTestEnvironmentPage(QWidget):
             f"Failed {counts[PreTestStatus.FAIL]}    Missing {counts[PreTestStatus.MISSING]}"
         )
         if result.blocking_reasons:
-            summary = f"{len(result.blocking_reasons)} blocking issue(s). Select a row or View Details."
+            summary = f"{len(result.blocking_reasons)} blocking issue(s). Select a row for details."
             tooltip = "\n".join(result.blocking_reasons)
         elif self.selected_test_ids:
             summary = "Dependencies for the selected test are ready."
@@ -664,10 +727,10 @@ class PreTestEnvironmentPage(QWidget):
         self.reason_label.setToolTip(tooltip)
         if result.baseline:
             self.baseline_status.set_status("COMPLETED")
-            self.baseline_summary.setPlainText(baseline_summary_text(result.baseline))
+            self._set_baseline_summary(baseline_summary_text(result.baseline))
         else:
             self.baseline_status.set_status("NOT MEASURED")
-            self.baseline_summary.setPlainText("No valid system baseline is available.")
+            self._set_baseline_summary("No valid system baseline is available.")
         self.dut_label.setText("DUT INFORMATION\n" + "    ".join(f"{key}: {value}" for key, value in result.dut_info.items()))
         if result.dut_info:
             self.dut_info_view.setHtml(
@@ -686,16 +749,33 @@ class PreTestEnvironmentPage(QWidget):
             actual = QTableWidgetItem(check.actual)
             actual.setToolTip(check.actual)
             self.check_table.setItem(row, 1, actual)
-            status_item = SortableTableItem(_display_status(check.status))
+            status_item = SortableTableItem("", _display_status(check.status))
+            status_item.setToolTip(_display_status(check.status))
             self.check_table.setItem(row, 2, status_item)
             self.check_table.setCellWidget(row, 2, _badge_cell(check.status))
-        header_height = self.check_table.horizontalHeader().height() or 30
-        rows_height = min(max(len(result.checks), 1), 10) * self.check_table.verticalHeader().defaultSectionSize()
-        self.check_table.setMaximumHeight(header_height + rows_height + 8)
         self.override_button.setVisible(result.status == EnvironmentStatus.NOT_READY)
         self.go_dashboard_button.hide()
         self.detail_area.setPlainText("Select a check to view details and remediation.")
         self._update_action_hierarchy()
+
+    def _set_baseline_summary(self, text: str) -> None:
+        self._baseline_summary_text = "  •  ".join(
+            line.strip() for line in text.splitlines() if line.strip()
+        ) or "—"
+        self.baseline_summary.setToolTip(text)
+        self._elide_baseline_summary()
+
+    def _elide_baseline_summary(self) -> None:
+        width = max(80, self.baseline_summary.width() - 4)
+        self.baseline_summary.setText(
+            self.baseline_summary.fontMetrics().elidedText(
+                self._baseline_summary_text, Qt.TextElideMode.ElideRight, width
+            )
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._elide_baseline_summary()
 
     def _show_check_detail(self, row: int, _column: int, _old_row: int, _old_column: int) -> None:
         if self.result is None or not 0 <= row < len(self.result.checks):
@@ -786,13 +866,17 @@ class VDCatalogPage(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         title = QLabel("VD SYSTEM STRESS TEST")
-        title.setObjectName("PageTitle")
-        root.addWidget(title)
+        title.setObjectName("CardTitle")
+        title_row.addWidget(title)
         self.message_label = QLabel("")
         self.message_label.setObjectName("Muted")
-        root.addWidget(self.message_label)
+        title_row.addWidget(self.message_label)
+        title_row.addStretch()
+        root.addLayout(title_row)
         self.view_stack = QStackedWidget()
         catalog_view = QWidget()
         catalog_layout = QVBoxLayout(catalog_view)
@@ -819,25 +903,32 @@ class VDCatalogPage(QWidget):
 
         filter_bar = QFrame()
         filter_bar.setObjectName("StressFilterBar")
+        filter_bar.setMaximumHeight(44)
         filters = QHBoxLayout(filter_bar)
-        filters.setContentsMargins(10, 7, 10, 7)
-        filters.setSpacing(7)
+        filters.setContentsMargins(8, 4, 8, 4)
+        filters.setSpacing(6)
         self.group_combo = QComboBox()
+        self.group_combo.setMinimumWidth(130)
+        self.group_combo.setMaximumWidth(220)
         self.group_combo.addItem("All Groups")
         self.group_combo.addItems(sorted({item.group for item in self.catalog.definitions}))
         self.status_combo = QComboBox()
+        self.status_combo.setMinimumWidth(92)
+        self.status_combo.setMaximumWidth(140)
         self.status_combo.addItem("All")
         self.status_combo.addItems([status.value for status in RuntimeStatus])
         self.severity_combo = QComboBox()
+        self.severity_combo.setMinimumWidth(88)
+        self.severity_combo.setMaximumWidth(140)
         self.severity_combo.addItem("All")
         self.severity_combo.addItems(sorted({item.severity for item in self.catalog.definitions if item.severity}))
 
         filters.addWidget(QLabel("Group"))
-        filters.addWidget(self.group_combo, 2)
+        filters.addWidget(self.group_combo)
         filters.addWidget(QLabel("Status"))
-        filters.addWidget(self.status_combo, 1)
+        filters.addWidget(self.status_combo)
         filters.addWidget(QLabel("Severity"))
-        filters.addWidget(self.severity_combo, 1)
+        filters.addWidget(self.severity_combo)
         filters.addStretch()
         self.reset_button = _button("RESET", "SmallButton")
         self.columns_button = QToolButton()
@@ -852,47 +943,62 @@ class VDCatalogPage(QWidget):
         filters.addWidget(self.refresh_button)
         catalog_layout.addWidget(filter_bar)
 
-        self.select_visible = QCheckBox("Select All Visible")
-        self.select_visible.toggled.connect(self._select_all_visible)
-        catalog_layout.addWidget(self.select_visible)
-
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.catalog_splitter = splitter
         self.table = QTableWidget(0, 7)
         self.table.setObjectName("StressTable")
-        self.table.setHorizontalHeaderLabels(["Select", "Test ID", "Group", "Test Name", "Duration", "Severity", "Status"])
+        self.select_all_header = CheckBoxHeader(self.table)
+        self.table.setHorizontalHeader(self.select_all_header)
+        self.table.setHorizontalHeaderLabels(["", "Test ID", "Test Name", "Group", "Duration", "Severity", "Status"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setWordWrap(False)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.verticalHeader().setDefaultSectionSize(32)
         header = self.table.horizontalHeader()
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
-        header.setMinimumSectionSize(62)
-        for column in range(self.table.columnCount()):
+        header.setFixedHeight(34)
+        header.setMinimumSectionSize(30)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        for column in range(1, self.table.columnCount()):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 66)
-        self.table.setColumnWidth(1, 112)
-        self.table.setColumnWidth(2, 175)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 32)
+        self.table.setColumnWidth(1, 110)
+        self.table.setColumnWidth(3, 155)
         self.table.setColumnWidth(4, 78)
         self.table.setColumnWidth(5, 82)
         self.table.setColumnWidth(6, 110)
         self.table.setSortingEnabled(True)
         self.table.itemSelectionChanged.connect(self.render_details)
         self.table.itemChanged.connect(self._selection_count_changed)
+        self.select_all_header.toggled.connect(self._select_all_visible)
         splitter.addWidget(self.table)
 
-        details = QFrame()
-        details.setObjectName("StressPanel")
-        details_layout = QVBoxLayout(details)
+        self.details_container = QWidget()
+        details_container_layout = QVBoxLayout(self.details_container)
+        details_container_layout.setContentsMargins(0, 0, 0, 0)
+        details_container_layout.setSpacing(0)
+        self.details_panel = QFrame()
+        self.details_panel.setObjectName("StressPanel")
+        details_layout = QVBoxLayout(self.details_panel)
         details_layout.setContentsMargins(10, 8, 10, 8)
-        details_layout.setSpacing(6)
+        details_layout.setSpacing(4)
+        details_header = QHBoxLayout()
         details_title = QLabel("TEST CASE DETAILS")
         details_title.setObjectName("CardTitle")
-        details_layout.addWidget(details_title)
+        self.collapse_details_button = QToolButton()
+        self.collapse_details_button.setObjectName("DetailsToggle")
+        self.collapse_details_button.setText("<")
+        self.collapse_details_button.setToolTip("Collapse test case details")
+        self.collapse_details_button.setFixedSize(28, 28)
+        self.collapse_details_button.clicked.connect(self.toggle_details)
+        details_header.addWidget(details_title)
+        details_header.addStretch()
+        details_header.addWidget(self.collapse_details_button)
+        details_layout.addLayout(details_header)
 
         self.details_stack = QStackedWidget()
         placeholder = QLabel("Select a test case to view details.")
@@ -920,21 +1026,32 @@ class VDCatalogPage(QWidget):
         details_layout.addWidget(self.details_stack, 1)
         self.details_view = self.overview_view
         self.evidence_plan_box = evidence_page
-        splitter.addWidget(details)
+        self.expand_details_button = QToolButton()
+        self.expand_details_button.setObjectName("DetailsToggle")
+        self.expand_details_button.setText(">")
+        self.expand_details_button.setToolTip("Expand test case details")
+        self.expand_details_button.setFixedSize(28, 28)
+        self.expand_details_button.clicked.connect(self.toggle_details)
+        self.expand_details_button.hide()
+        details_container_layout.addWidget(self.details_panel, 1)
+        details_container_layout.addWidget(
+            self.expand_details_button, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+        )
+        splitter.addWidget(self.details_container)
         splitter.setChildrenCollapsible(False)
-        splitter.setStretchFactor(0, 5)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([820, 440])
+        splitter.setStretchFactor(0, 64)
+        splitter.setStretchFactor(1, 36)
+        splitter.setSizes([780, 440])
+        self._details_collapsed = False
+        self._expanded_splitter_sizes = [780, 440]
         catalog_layout.addWidget(splitter, 1)
 
         footer = QHBoxLayout()
         self.selected_label = QLabel("Selected 0  •  Visible 0  •  Total 0")
         self.environment_caption = QLabel("Environment")
         self.environment_label = StatusBadge("NOT CHECKED")
-        self.details_button = _button("TEST DETAILS")
         self.history_button = _button("HISTORY")
         self.run_button = _button("RUN SELECTED", "PrimaryButton")
-        self.details_button.clicked.connect(self.render_details)
         self.history_button.clicked.connect(self.show_history)
         self.run_button.clicked.connect(lambda: self.run_requested.emit(self.selected_definitions()))
         footer.addWidget(self.selected_label)
@@ -942,7 +1059,6 @@ class VDCatalogPage(QWidget):
         footer.addWidget(self.environment_caption)
         footer.addWidget(self.environment_label)
         footer.addStretch()
-        footer.addWidget(self.details_button)
         footer.addWidget(self.history_button)
         footer.addWidget(self.run_button)
         catalog_layout.addLayout(footer)
@@ -971,10 +1087,10 @@ class VDCatalogPage(QWidget):
         return view
 
     def _build_column_menu(self) -> None:
-        labels = ("Select", "Test ID", "Group", "Test Name", "Duration", "Severity", "Status")
-        essential = {0, 1, 3, 6}
+        labels = ("", "Test ID", "Test Name", "Group", "Duration", "Severity", "Status")
+        essential = {1, 2, 6}
         self.column_actions = {}
-        for column, label in enumerate(labels):
+        for column, label in enumerate(labels[1:], start=1):
             action = QAction(label, self.columns_menu)
             action.setCheckable(True)
             action.setChecked(True)
@@ -994,13 +1110,37 @@ class VDCatalogPage(QWidget):
         if self._column_visibility_user_set:
             return
         show_optional = event.size().width() >= 1080
-        for column in (2, 4, 5):
+        for column in (3, 4, 5):
             action = self.column_actions.get(column)
             if action is not None:
                 action.blockSignals(True)
                 action.setChecked(show_optional)
                 action.blockSignals(False)
             self.table.setColumnHidden(column, not show_optional)
+
+    def toggle_details(self) -> None:
+        self._set_details_collapsed(not self._details_collapsed)
+
+    def _set_details_collapsed(self, collapsed: bool) -> None:
+        if collapsed == self._details_collapsed:
+            return
+        if collapsed:
+            sizes = self.catalog_splitter.sizes()
+            if len(sizes) == 2 and sizes[1] > 40:
+                self._expanded_splitter_sizes = sizes
+            self.details_panel.hide()
+            self.expand_details_button.show()
+            self.catalog_splitter.setStretchFactor(0, 1)
+            self.catalog_splitter.setStretchFactor(1, 0)
+            total = max(sum(sizes), self.catalog_splitter.width())
+            self.catalog_splitter.setSizes([max(0, total - 32), 32])
+        else:
+            self.expand_details_button.hide()
+            self.details_panel.show()
+            self.catalog_splitter.setStretchFactor(0, 64)
+            self.catalog_splitter.setStretchFactor(1, 36)
+            self.catalog_splitter.setSizes(self._expanded_splitter_sizes)
+        self._details_collapsed = collapsed
 
     def reset_filters(self) -> None:
         for combo in (self.group_combo, self.status_combo, self.severity_combo):
@@ -1119,11 +1259,11 @@ class VDCatalogPage(QWidget):
             self.table.setItem(row, 0, check)
             values = (
                 SortableTableItem(definition.test_id),
-                SortableTableItem(definition.group),
                 SortableTableItem(definition.test_name),
+                SortableTableItem(definition.group),
                 SortableTableItem(definition.duration_text, definition.duration_seconds if definition.duration_seconds is not None else float("inf")),
                 SortableTableItem(definition.severity),
-                SortableTableItem(_display_status(definition.runtime_status)),
+                SortableTableItem("", _display_status(definition.runtime_status)),
             )
             for column, item in enumerate(values, start=1):
                 item.setData(Qt.ItemDataRole.UserRole, definition.test_id)
@@ -1140,8 +1280,11 @@ class VDCatalogPage(QWidget):
         return [item for item in self.catalog.definitions if item.test_id in self._selected_ids]
 
     def _select_all_visible(self, checked: bool) -> None:
+        self.table.blockSignals(True)
         for row in range(self.table.rowCount()):
             self.table.item(row, 0).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        self.table.blockSignals(False)
+        self._selection_count_changed()
 
     def _selection_count_changed(self, *_args) -> None:
         visible_ids = {definition.test_id for definition in getattr(self, "visible_definitions", [])}
@@ -1153,6 +1296,18 @@ class VDCatalogPage(QWidget):
             elif test_id in visible_ids:
                 self._selected_ids.discard(test_id)
         selected = self.selected_definitions()
+        checked_count = sum(
+            self.table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in range(self.table.rowCount())
+            if self.table.item(row, 0) is not None
+        )
+        if checked_count == 0:
+            header_state = Qt.CheckState.Unchecked
+        elif checked_count == self.table.rowCount():
+            header_state = Qt.CheckState.Checked
+        else:
+            header_state = Qt.CheckState.PartiallyChecked
+        self.select_all_header.setCheckState(header_state)
         self.selected_label.setText(
             f"Selected {len(selected)}  •  Visible {len(self.visible_definitions)}  •  Total {len(self.catalog.definitions)}"
         )
@@ -1407,31 +1562,31 @@ class SystemStressPage(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 18)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(8)
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        title_block = QVBoxLayout()
+        title_block.setSpacing(1)
         heading = QLabel("System Stress Test")
         heading.setObjectName("PageTitle")
         subtitle = QLabel("Stress / System")
         subtitle.setObjectName("Muted")
-        root.addWidget(heading)
-        root.addWidget(subtitle)
-        header = QFrame()
-        header.setObjectName("StressPanel")
-        header.setMaximumHeight(108)
-        summary = QGridLayout(header)
-        summary.setContentsMargins(12, 8, 12, 8)
-        summary.setHorizontalSpacing(12)
-        summary.setVerticalSpacing(5)
-        session_title = QLabel("SESSION")
-        session_title.setObjectName("CardTitle")
-        summary.addWidget(session_title, 0, 0, 2, 1)
-        self.session_label = QLabel("NOT CREATED")
+        title_block.addWidget(heading)
+        title_block.addWidget(subtitle)
+        header.addLayout(title_block)
+        header.addStretch(1)
+
         self.environment_label = StatusBadge("NOT CHECKED")
         self.dut_status_label = StatusBadge("DISCONNECTED")
         self.root_label = QLabel()
+        self.root_label.setMinimumWidth(190)
+        self.root_label.setMaximumWidth(330)
+        self.root_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.root_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.disk_label = QLabel("—")
 
-        def add_summary_field(caption: str, value: QLabel, column: int, stretch: int = 0) -> None:
+        def add_summary_field(caption: str, value: QWidget) -> None:
             field = QWidget()
             field_layout = QVBoxLayout(field)
             field_layout.setContentsMargins(0, 0, 0, 0)
@@ -1440,34 +1595,50 @@ class SystemStressPage(QWidget):
             caption_label.setObjectName("Muted")
             field_layout.addWidget(caption_label)
             field_layout.addWidget(value)
-            summary.addWidget(field, 0, column)
-            if stretch:
-                summary.setColumnStretch(column, stretch)
+            header.addWidget(field, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        add_summary_field("Session", self.session_label, 1)
-        add_summary_field("Environment", self.environment_label, 2)
-        add_summary_field("DUT", self.dut_status_label, 3)
-        add_summary_field("Evidence Root", self.root_label, 4, 1)
-        add_summary_field("Disk Free", self.disk_label, 5)
-        self.select_folder_button = _button("SELECT FOLDER")
-        self.default_folder_button = _button("USE DEFAULT")
-        self.open_folder_button = _button("OPEN FOLDER")
-        self.select_folder_button.setToolTip("Select Evidence Root folder")
-        self.default_folder_button.setToolTip("Use default Evidence Root")
-        self.open_folder_button.setToolTip("Open Evidence Root folder")
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
-        button_row.addStretch()
-        button_row.addWidget(self.select_folder_button)
-        button_row.addWidget(self.default_folder_button)
-        button_row.addWidget(self.open_folder_button)
-        summary.addLayout(button_row, 1, 1, 1, 5)
-        self.select_folder_button.clicked.connect(self.select_folder)
-        self.default_folder_button.clicked.connect(self.use_default)
-        self.open_folder_button.clicked.connect(self.open_folder)
-        root.addWidget(header)
+        def add_separator() -> None:
+            separator = QFrame()
+            separator.setObjectName("HeaderSeparator")
+            separator.setFrameShape(QFrame.Shape.VLine)
+            separator.setFrameShadow(QFrame.Shadow.Plain)
+            header.addWidget(separator)
+
+        add_summary_field("Environment", self.environment_label)
+        add_separator()
+        add_summary_field("DUT", self.dut_status_label)
+        add_separator()
+
+        evidence_value = QWidget()
+        evidence_layout = QHBoxLayout(evidence_value)
+        evidence_layout.setContentsMargins(0, 0, 0, 0)
+        evidence_layout.setSpacing(4)
+        self.folder_button = QToolButton()
+        self.folder_button.setObjectName("HeaderFolderButton")
+        self.folder_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.folder_button.setText("▾")
+        self.folder_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.folder_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.folder_button.setToolTip("Evidence folder actions")
+        self.folder_menu = QMenu(self.folder_button)
+        self.change_folder_action = self.folder_menu.addAction("Change Folder")
+        self.default_folder_action = self.folder_menu.addAction("Use Default Folder")
+        self.folder_menu.addSeparator()
+        self.open_folder_action = self.folder_menu.addAction("Open Folder")
+        self.folder_button.setMenu(self.folder_menu)
+        self.change_folder_action.triggered.connect(self.select_folder)
+        self.default_folder_action.triggered.connect(self.use_default)
+        self.open_folder_action.triggered.connect(self.open_folder)
+        evidence_layout.addWidget(self.root_label, 1)
+        evidence_layout.addWidget(self.folder_button)
+        add_summary_field("Evidence Root", evidence_value)
+        add_separator()
+        add_summary_field("Disk Free", self.disk_label)
+        root.addLayout(header)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("StressTabs")
+        self.tabs.tabBar().setExpanding(False)
         self.pretest_page = PreTestEnvironmentPage(self.session_manager, self.remote_service)
         self.vd_page = VDCatalogPage(self.catalog)
         if self.catalog_error:
@@ -1502,23 +1673,37 @@ class SystemStressPage(QWidget):
         self.vd_page.finish_requested.connect(self.runner.finish_for_review)
 
     def refresh_header(self) -> None:
-        self.session_label.setText(self.session_manager.session_id or "NOT CREATED")
         status = self.pretest_page.environment_status.value.replace("_", " ")
         if self.pretest_page.override:
             status += " (OVERRIDE)"
         self.environment_label.set_status(status)
         self.vd_page.environment_label.set_status(status)
         self._update_dut_status()
-        self.root_label.setText(str(self.session_manager.evidence_root))
+        self._evidence_root_text = str(self.session_manager.evidence_root)
+        self.root_label.setToolTip(self._evidence_root_text)
+        self._elide_evidence_root()
         free = self.session_manager.disk_free()
         self.disk_label.setText(f"{free / (1024 ** 3):.1f} GiB" if free is not None else "Unavailable")
         root_locked = self.session_manager.session_dir is not None
-        self.select_folder_button.setEnabled(not root_locked)
-        self.default_folder_button.setEnabled(not root_locked)
+        self.change_folder_action.setEnabled(not root_locked)
+        self.default_folder_action.setEnabled(not root_locked)
+
+    def _elide_evidence_root(self) -> None:
+        path = getattr(self, "_evidence_root_text", "")
+        width = max(80, self.root_label.width() - 4)
+        self.root_label.setText(
+            self.root_label.fontMetrics().elidedText(
+                path, Qt.TextElideMode.ElideMiddle, width
+            )
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._elide_evidence_root()
 
     def _update_dut_status(self, *_args) -> None:
         if self.remote_service is None:
-            status = "NOT CONFIGURED"
+            status = "DISCONNECTED"
         elif getattr(self.remote_service, "is_connected", False):
             status = "CONNECTED"
         else:

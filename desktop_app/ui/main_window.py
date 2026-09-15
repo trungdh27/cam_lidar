@@ -27,6 +27,7 @@ from desktop_app.ui.ai_page import AiPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 from desktop_app.ui.system_stress_page import SystemStressPage
+from desktop_app.ui.wifi_page import WifiPage
 from devices.livox.profile import load_default_livox_profile
 from devices.livox.testing import (
     LidarTestExecutionService,
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         ("□", "Evidence"),
         ("▤", "Reports"),
         ("⚙", "Settings"),
+        ("▰", "Wi-Fi"),
         ("◫", "Stress Test"),
     ]
 
@@ -211,6 +213,9 @@ class MainWindow(QMainWindow):
                     self.navigate_to
                 )
                 self.pages.addWidget(self.system_stress_page)
+            elif self.NAV_ITEMS[index][1] == "Wi-Fi":
+                self.wifi_page = WifiPage(self.jetson_service)
+                self.pages.addWidget(self.wifi_page)
             else:
                 title, subtitle = placeholders[index]
                 self.pages.addWidget(PlaceholderPage(title, subtitle))

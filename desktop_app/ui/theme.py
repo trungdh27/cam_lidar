@@ -218,7 +218,7 @@ QTabWidget#StressTabs::pane, QTabWidget#StressDetailTabs::pane {
 QTabWidget#StressTabs QTabBar::tab, QTabWidget#StressDetailTabs QTabBar::tab {
     background: #EEF2F7;
     border: 1px solid #D8E0EB;
-    padding: 7px 13px;
+    padding: 6px 11px;
     color: #475467;
     font-weight: 600;
 }
@@ -233,6 +233,25 @@ QFrame#StressPanel, QFrame#StressFilterBar {
     background: #FFFFFF;
     border: 1px solid #D8E0EB;
     border-radius: 8px;
+}
+
+QFrame#HeaderSeparator {
+    color: #D8E0EB;
+    max-width: 1px;
+}
+
+QToolButton#HeaderFolderButton, QToolButton#DetailsToggle {
+    background: #FFFFFF;
+    border: 1px solid #D0D5DD;
+    border-radius: 6px;
+    color: #344054;
+    padding: 4px 6px;
+}
+
+QToolButton#HeaderFolderButton:hover, QToolButton#DetailsToggle:hover {
+    background: #EFF4FF;
+    border-color: #84ADFF;
+    color: #155EEF;
 }
 
 QTableWidget#StressTable {
@@ -305,6 +324,25 @@ QFrame#MetricCard {
     background: #FFFFFF;
     border: 1px solid #D8E0EB;
     border-radius: 9px;
+}
+
+QFrame#WifiMetricCard, QFrame#WifiMiniMonitor {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 7px;
+}
+
+QLabel#WifiMetricValue {
+    color: #182230;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QPlainTextEdit#WifiCommand {
+    background: #F2F4F7;
+    border: 1px solid #D8E0EB;
+    border-radius: 4px;
+    font-family: "DejaVu Sans Mono", monospace;
 }
 
 QLabel#MetricLabel {
