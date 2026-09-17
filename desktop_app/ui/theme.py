@@ -48,6 +48,64 @@ QFrame#Card {
     border-radius: 9px;
 }
 
+QFrame#Card[accent="blue"] {
+    border-top: 3px solid #84ADFF;
+}
+
+QFrame#Card[accent="purple"] {
+    border-top: 3px solid #B692F6;
+}
+
+QWidget#AudioHeader {
+    background: transparent;
+}
+
+QScrollArea#AudioScrollArea {
+    background: transparent;
+}
+
+QWidget#AudioPage QComboBox,
+QWidget#AudioPage QLineEdit,
+QWidget#AudioPage QSpinBox {
+    min-height: 24px;
+}
+
+QWidget#AudioPage QPushButton#SmallButton,
+QWidget#AudioPage QToolButton#DetailsToggle {
+    min-height: 28px;
+}
+
+QLabel#AudioValueEmphasis {
+    color: #155EEF;
+    font-size: 15px;
+    font-weight: 800;
+    min-width: 42px;
+}
+
+QLabel#WarningLabel {
+    color: #B54708;
+    font-weight: 600;
+}
+
+QTabWidget#AudioAdvancedTabs::pane {
+    border: 1px solid #E4E7EC;
+    background: #FCFCFD;
+}
+
+QTabWidget#AudioAdvancedTabs QTabBar::tab {
+    background: #F8FAFC;
+    border: 1px solid #E4E7EC;
+    padding: 5px 10px;
+    color: #475467;
+    font-weight: 600;
+}
+
+QTabWidget#AudioAdvancedTabs QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #155EEF;
+    border-bottom: 2px solid #155EEF;
+}
+
 QLabel#CardTitle {
     font-size: 14px;
     font-weight: 700;

@@ -23,6 +23,7 @@ from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
+from desktop_app.ui.audio_page import AudioPage
 from desktop_app.ui.ai_page import AiPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
@@ -58,6 +59,7 @@ class MainWindow(QMainWindow):
         ("◉", "Dashboard"),
         ("▦", "Devices"),
         ("▣", "Camera"),
+        ("♫", "Audio"),
         ("✦", "AI"),
         ("◌", "LiDAR"),
         ("⌘", "IMU"),
@@ -157,14 +159,14 @@ class MainWindow(QMainWindow):
             0: ("Dashboard", "Hardware test overview."),
             1: ("Devices", "Connected device inventory."),
             2: ("Camera", "Camera module."),
-            5: ("IMU", "IMU module."),
-            6: ("CAN", "CAN module."),
-            7: ("EtherCAT", "EtherCAT module."),
-            8: ("Test Runner", "Cross-device test runner."),
-            9: ("History", "Test session history."),
-            10: ("Evidence", "Evidence storage."),
-            11: ("Reports", "Test reports."),
-            12: ("Settings", "Application settings."),
+            6: ("IMU", "IMU module."),
+            7: ("CAN", "CAN module."),
+            8: ("EtherCAT", "EtherCAT module."),
+            9: ("Test Runner", "Cross-device test runner."),
+            10: ("History", "Test session history."),
+            11: ("Evidence", "Evidence storage."),
+            12: ("Reports", "Test reports."),
+            13: ("Settings", "Application settings."),
         }
 
         for index in range(len(self.NAV_ITEMS)):
@@ -190,9 +192,15 @@ class MainWindow(QMainWindow):
                 self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
             elif index == 3:
+                self.audio_page = AudioPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.audio_page)
+            elif index == 4:
                 self.ai_page = AiPage(self.jetson_state, self.jetson_service)
                 self.pages.addWidget(self.ai_page)
-            elif index == 4:
+            elif index == 5:
                 self.lidar_page = LidarPage(
                     self.jetson_state,
                     self.jetson_service,
@@ -250,6 +258,8 @@ class MainWindow(QMainWindow):
             self.lidar_page.shutdown()
         if hasattr(self, "system_stress_page"):
             self.system_stress_page.shutdown()
+        if hasattr(self, "audio_page"):
+            self.audio_page.shutdown()
         if hasattr(self, "ai_page") and self.ai_page._worker and self.ai_page._worker.isRunning():
             event.ignore()
             self.ai_page.cancel()
