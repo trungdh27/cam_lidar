@@ -102,9 +102,9 @@ class DashboardPage(QWidget):
     DEVICE_TYPES = [
         ("▣", "Camera", 2, False),
         ("◌", "LiDAR", 4, True),
-        ("⌘", "IMU", 5, False),
-        ("▤", "CAN", 6, False),
-        ("⌘", "EtherCAT", 7, False),
+        ("⌘", "IMU", 6, False),
+        ("▤", "CAN", 7, False),
+        ("⌘", "EtherCAT", 8, False),
     ]
 
     AVAILABLE_VALUES = {
