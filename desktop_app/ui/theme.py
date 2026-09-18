@@ -60,6 +60,12 @@ QWidget#AudioHeader {
     background: transparent;
 }
 
+QFrame#AudioEvidenceBar {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 7px;
+}
+
 QScrollArea#AudioScrollArea {
     background: transparent;
 }

@@ -9,10 +9,17 @@ except ModuleNotFoundError:
 from desktop_app.audio.audio_models import (
     AudioRecordingConfig,
     AudioRecordingVerification,
+    AudioPlaybackFile,
+    PlaybackSource,
     build_recording_command,
     build_default_sink_command,
     build_default_source_command,
+    build_speaker_channel_test_command,
+    prepare_speaker_channel_test,
+    parse_pulse_sample_spec,
+    preferred_recording_configuration,
     build_playback_command,
+    normalize_remote_audio_path,
     parse_pactl_devices,
     parse_sink_mute,
     parse_sink_volume,
@@ -54,6 +61,7 @@ class _PlaybackService:
         self.remote_process_failed = _Signal()
         self.disconnected = _Signal()
         self.started = []
+        self.process_calls = []
         self.stopped = []
         self.submitted = []
 
@@ -62,9 +70,10 @@ class _PlaybackService:
         self.submitted.append((request_id, operation))
         return request_id
 
-    def start_remote_process(self, _name, _command):
+    def start_remote_process(self, name, command):
         request_id = f"audio:{len(self.started) + 1}"
         self.started.append(request_id)
+        self.process_calls.append((name, command, request_id))
         return request_id
 
     def stop_remote_process(self, request_id):
@@ -111,6 +120,106 @@ class AudioPlaybackManagerTests(unittest.TestCase):
         service.remote_process_finished.emit(request_id, -15)
         self.assertFalse(manager.playback_active)
 
+    def test_recorded_playback_reuses_shared_playback_process(self):
+        service = _PlaybackService()
+        manager = AudioManager(service)
+        path = "/home/user/audio recordings/record.wav"
+        manager._last_recorded_file = AudioRecordingVerification(path, True, 320044, True)
+
+        self.assertTrue(manager.play_recorded_file())
+        validation_id = service.submitted[-1][0]
+        self.assertFalse(manager.play_recorded_file())
+        verified_file = AudioPlaybackFile(path, "record.wav", True, 320044)
+        service.operation_succeeded.emit("unrelated:validation", verified_file)
+        self.assertEqual(service.started, [])
+        service.operation_succeeded.emit(validation_id, verified_file)
+
+        request_id = manager.playback_request_id
+        self.assertIsNotNone(request_id)
+        self.assertEqual(manager.playback_source, PlaybackSource.RECORDED_FILE)
+        self.assertEqual(
+            service.process_calls,
+            [("audio_playback", "paplay '/home/user/audio recordings/record.wav'", request_id)],
+        )
+        service.remote_process_started.emit("unrelated:playback")
+        self.assertTrue(manager.playback_active)
+        service.remote_process_started.emit(request_id)
+        service.remote_process_finished.emit(request_id, 0)
+        self.assertFalse(manager.playback_active)
+
+    def test_missing_recorded_file_fails_without_starting_playback(self):
+        service = _PlaybackService()
+        manager = AudioManager(service)
+        manager._last_recorded_file = AudioRecordingVerification(
+            "/home/user/record.wav", True, 320044, True
+        )
+        failures = []
+        manager.playback_failed.connect(failures.append)
+
+        self.assertTrue(manager.play_recorded_file())
+        validation_id = service.submitted[-1][0]
+        service.operation_failed.emit(validation_id, "Recorded WAV file is no longer available.")
+
+        self.assertFalse(manager.playback_active)
+        self.assertEqual(service.started, [])
+        self.assertIn("Recorded audio playback failed", failures[-1])
+
+    def test_speaker_channel_test_prevents_duplicates_and_filters_request_ids(self):
+        service = _PlaybackService()
+        manager = AudioManager(service)
+        completed = []
+        manager.speaker_test_completed.connect(completed.append)
+
+        self.assertTrue(manager.start_speaker_channel_test())
+        preflight_id = service.submitted[-1][0]
+        self.assertFalse(manager.start_speaker_channel_test())
+        service.operation_succeeded.emit(preflight_id, build_speaker_channel_test_command())
+        request_id = manager.speaker_test_request_id
+        self.assertIsNotNone(request_id)
+        self.assertEqual(service.started, [request_id])
+
+        service.remote_process_started.emit("audio_playback:unrelated")
+        self.assertTrue(manager.speaker_test_active)
+        service.remote_process_finished.emit("audio_recording:unrelated", 0)
+        self.assertTrue(manager.speaker_test_active)
+        service.remote_process_started.emit(request_id)
+        service.remote_process_finished.emit(request_id, 0)
+        self.assertFalse(manager.speaker_test_active)
+        self.assertIsNone(manager.speaker_test_request_id)
+        self.assertEqual(completed, [0])
+
+    def test_speaker_channel_test_failure_clears_request_id(self):
+        service = _PlaybackService()
+        manager = AudioManager(service)
+        failures = []
+        manager.speaker_test_failed.connect(failures.append)
+
+        self.assertTrue(manager.start_speaker_channel_test())
+        preflight_id = service.submitted[-1][0]
+        service.operation_succeeded.emit(preflight_id, build_speaker_channel_test_command())
+        request_id = manager.speaker_test_request_id
+        service.remote_process_failed.emit(request_id, "PulseAudio unavailable")
+
+        self.assertFalse(manager.speaker_test_active)
+        self.assertIsNone(manager.speaker_test_request_id)
+        self.assertIn("Left / Right speaker test failed", failures[-1])
+
+    def test_speaker_channel_test_disconnect_clears_state(self):
+        service = _PlaybackService()
+        manager = AudioManager(service)
+        disconnected = []
+        manager.speaker_test_disconnected.connect(lambda: disconnected.append(True))
+
+        self.assertTrue(manager.start_speaker_channel_test())
+        preflight_id = service.submitted[-1][0]
+        service.operation_succeeded.emit(preflight_id, build_speaker_channel_test_command())
+        self.assertIsNotNone(manager.speaker_test_request_id)
+        service.disconnected.emit()
+
+        self.assertFalse(manager.speaker_test_active)
+        self.assertIsNone(manager.speaker_test_request_id)
+        self.assertEqual(disconnected, [True])
+
 
 @unittest.skipUnless(AudioManager is not None, "PySide6 is unavailable")
 class AudioRecordingManagerTests(unittest.TestCase):
@@ -153,6 +262,13 @@ class AudioRecordingManagerTests(unittest.TestCase):
         self.assertFalse(manager.recording_busy)
         self.assertEqual(len(completed), 1)
         self.assertEqual(failures, [])
+        self.assertEqual(manager.last_recorded_file, completed[0])
+
+        previous = manager.last_recorded_file
+        manager._complete_recording_verification(
+            AudioRecordingVerification(self._config().output_path, True, 44, False, "invalid")
+        )
+        self.assertEqual(manager.last_recorded_file, previous)
 
     def test_duplicate_start_does_not_create_second_recording(self):
         service = _PlaybackService()
@@ -163,6 +279,111 @@ class AudioRecordingManagerTests(unittest.TestCase):
 
 
 class AudioParsingTests(unittest.TestCase):
+    def test_speaker_channel_test_command_uses_pulse_default_routing(self):
+        self.assertEqual(
+            build_speaker_channel_test_command(),
+            "speaker-test -D pulse -c 2 -t wav -l 1",
+        )
+
+    def test_pulse_sample_spec_parsing(self):
+        for value, expected_rate in (
+            ("s16le 2ch 16000Hz", 16000),
+            ("s16le 2ch 44100Hz", 44100),
+            ("s16le 2ch 48000Hz", 48000),
+            ("float32le 2ch 48000Hz", 48000),
+        ):
+            spec = parse_pulse_sample_spec(value)
+            self.assertIsNotNone(spec)
+            self.assertEqual(spec.sample_format, value.split()[0])
+            self.assertEqual(spec.channels, 2)
+            self.assertEqual(spec.sample_rate_hz, expected_rate)
+        self.assertIsNone(parse_pulse_sample_spec("not a sample specification"))
+        self.assertIsNone(parse_pulse_sample_spec("s16le 0ch 0Hz"))
+
+    def test_sample_spec_is_stored_on_short_and_full_devices(self):
+        short = parse_pactl_short_devices(
+            "0\talsa_output.usb-test\tmodule\ts16le 2ch 16000Hz\tSUSPENDED\n"
+        )[0]
+        self.assertEqual(short.sample_format, "s16le")
+        self.assertEqual(short.channels, 2)
+        self.assertEqual(short.sample_rate_hz, 16000)
+        self.assertEqual(short.state, "SUSPENDED")
+        full = parse_pactl_devices(
+            "Sink #0\n"
+            "\tName: alsa_output.usb-test\n"
+            "\tDescription: USB Speaker\n"
+            "\tSample Specification: float32le 2ch 48000Hz\n"
+            "\tState: IDLE\n"
+        )[0]
+        self.assertEqual(full.sample_format, "float32le")
+        self.assertEqual(full.channels, 2)
+        self.assertEqual(full.sample_rate_hz, 48000)
+        self.assertEqual(full.state, "IDLE")
+
+    def test_speaker_channel_command_uses_validated_native_rate(self):
+        self.assertEqual(
+            build_speaker_channel_test_command(16000),
+            "speaker-test -D pulse -c 2 -r 16000 -t wav -l 1",
+        )
+        self.assertIn("-r 44100", build_speaker_channel_test_command(44100))
+        self.assertIn("-r 48000", build_speaker_channel_test_command(48000))
+        for rate in (16000, 44100, 48000):
+            command = build_speaker_channel_test_command(rate)
+            self.assertIn("-t wav", command)
+            self.assertNotIn("-t sine", command)
+            self.assertNotIn("-f 500", command)
+        with self.assertRaises(ValueError):
+            build_speaker_channel_test_command(480)
+        with self.assertRaises(ValueError):
+            build_speaker_channel_test_command("16000")
+
+    def test_spoken_prompt_directory_is_quoted_in_command(self):
+        command = build_speaker_channel_test_command(
+            16000, "/home/test user/.cache/cam_lidar/audio_speaker_test/16000"
+        )
+        self.assertIn("-r 16000", command)
+        self.assertIn("-t wav", command)
+        self.assertIn(
+            "-W '/home/test user/.cache/cam_lidar/audio_speaker_test/16000'",
+            command,
+        )
+        self.assertNotIn("-t sine", command)
+
+    def test_speaker_preparation_falls_back_without_native_rate(self):
+        preparation = prepare_speaker_channel_test(
+            "alsa_output.usb-test",
+            parse_pactl_short_devices("0\talsa_output.usb-test\tmodule\t\tIDLE\n"),
+        )
+        self.assertIsNone(preparation.native_sample_rate_hz)
+        self.assertEqual(preparation.command, build_speaker_channel_test_command())
+        self.assertIn("could not be detected", preparation.warning)
+
+    def test_speaker_preparation_matches_current_default_sink(self):
+        devices = parse_pactl_short_devices(
+            "0\talsa_output.other\tmodule\ts16le 2ch 48000Hz\tIDLE\n"
+            "1\talsa_output.usb-test\tmodule\ts16le 2ch 16000Hz\tSUSPENDED\n"
+        )
+        preparation = prepare_speaker_channel_test("alsa_output.usb-test", devices)
+        self.assertEqual(preparation.native_sample_rate_hz, 16000)
+        self.assertEqual(preparation.channels, 2)
+        self.assertIn("-r 16000", preparation.command)
+
+    def test_native_input_recommends_recording_configuration(self):
+        source_16k = parse_pactl_short_devices(
+            "0\talsa_input.usb-test\tmodule\ts16le 2ch 16000Hz\tIDLE\n"
+        )[0]
+        self.assertEqual(
+            preferred_recording_configuration(source_16k),
+            (16000, 2, "S16_LE"),
+        )
+        source_48k = parse_pactl_short_devices(
+            "0\talsa_input.usb-test\tmodule\ts16le 2ch 48000Hz\tIDLE\n"
+        )[0]
+        self.assertEqual(
+            preferred_recording_configuration(source_48k),
+            (48000, 2, "S16_LE"),
+        )
+
     def test_recording_config_validation(self):
         config = AudioRecordingConfig(
             "alsa_input.usb-mic",
@@ -210,6 +431,24 @@ class AudioParsingTests(unittest.TestCase):
             AudioRecordingConfig("source;touch /tmp/pwned", "/home/user/record.wav", 16000, 2, "S16_LE", None)
         )
         self.assertEqual(shlex.split(injection)[1], "--device=source;touch /tmp/pwned")
+
+    def test_remote_audio_path_normalization_and_playback_command(self):
+        relative = "~/audio_test_logs/manual/record_001.wav"
+        absolute = "/home/agx/audio_test_logs/manual/record_001.wav"
+        self.assertEqual(normalize_remote_audio_path(relative, "/home/agx"), absolute)
+        self.assertEqual(normalize_remote_audio_path(absolute, "/home/agx"), absolute)
+        self.assertEqual(
+            build_playback_command(relative, "/home/agx"),
+            "paplay /home/agx/audio_test_logs/manual/record_001.wav",
+        )
+        with self.assertRaises(ValueError):
+            build_playback_command(relative)
+        recording_command = build_recording_command(
+            AudioRecordingConfig("source", relative, 48000, 2, "S16_LE", 10),
+            "/home/agx",
+        )
+        self.assertIn("/home/agx/audio_test_logs/manual/record_001.wav", recording_command)
+        self.assertNotIn("~/audio_test_logs/manual/record_001.wav", recording_command)
 
     def test_recording_output_verification(self):
         valid = verify_recording_size("/home/user/record.wav", 320044)
