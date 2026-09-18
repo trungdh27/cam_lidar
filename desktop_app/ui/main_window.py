@@ -165,18 +165,18 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
 
         placeholders = {
-            0: ("Dashboard", "Hardware test overview."),
-            1: ("Devices", "Connected device inventory."),
-            2: ("Camera", "Camera module."),
-            6: ("IMU", "IMU module."),
-            7: ("CAN", "CAN module."),
-            8: ("EtherCAT", "EtherCAT module."),
-            9: ("Test Runner", "Cross-device test runner."),
-            10: ("History", "Test session history."),
-            11: ("Evidence", "Evidence storage."),
-            12: ("Reports", "Test reports."),
-            13: ("Settings", "Application settings."),
-        }
+    0: ("Dashboard", "Hardware test overview."),
+    1: ("Devices", "Connected device inventory."),
+    2: ("Camera", "Camera module."),
+    7: ("IMU", "IMU module."),
+    8: ("CAN", "CAN module."),
+    9: ("EtherCAT", "EtherCAT module."),
+    10: ("Test Runner", "Cross-device test runner."),
+    11: ("History", "Test session history."),
+    12: ("Evidence", "Evidence storage."),
+    13: ("Reports", "Test reports."),
+    14: ("Settings", "Application settings."),
+}
 
         for index in range(len(self.NAV_ITEMS)):
             if index == 0:
