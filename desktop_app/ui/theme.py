@@ -48,6 +48,64 @@ QFrame#Card {
     border-radius: 9px;
 }
 
+QFrame#Card[accent="blue"] {
+    border-top: 3px solid #84ADFF;
+}
+
+QFrame#Card[accent="purple"] {
+    border-top: 3px solid #B692F6;
+}
+
+QWidget#AudioHeader {
+    background: transparent;
+}
+
+QScrollArea#AudioScrollArea {
+    background: transparent;
+}
+
+QWidget#AudioPage QComboBox,
+QWidget#AudioPage QLineEdit,
+QWidget#AudioPage QSpinBox {
+    min-height: 24px;
+}
+
+QWidget#AudioPage QPushButton#SmallButton,
+QWidget#AudioPage QToolButton#DetailsToggle {
+    min-height: 28px;
+}
+
+QLabel#AudioValueEmphasis {
+    color: #155EEF;
+    font-size: 15px;
+    font-weight: 800;
+    min-width: 42px;
+}
+
+QLabel#WarningLabel {
+    color: #B54708;
+    font-weight: 600;
+}
+
+QTabWidget#AudioAdvancedTabs::pane {
+    border: 1px solid #E4E7EC;
+    background: #FCFCFD;
+}
+
+QTabWidget#AudioAdvancedTabs QTabBar::tab {
+    background: #F8FAFC;
+    border: 1px solid #E4E7EC;
+    padding: 5px 10px;
+    color: #475467;
+    font-weight: 600;
+}
+
+QTabWidget#AudioAdvancedTabs QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #155EEF;
+    border-bottom: 2px solid #155EEF;
+}
+
 QLabel#CardTitle {
     font-size: 14px;
     font-weight: 700;
@@ -218,7 +276,7 @@ QTabWidget#StressTabs::pane, QTabWidget#StressDetailTabs::pane {
 QTabWidget#StressTabs QTabBar::tab, QTabWidget#StressDetailTabs QTabBar::tab {
     background: #EEF2F7;
     border: 1px solid #D8E0EB;
-    padding: 7px 13px;
+    padding: 6px 11px;
     color: #475467;
     font-weight: 600;
 }
@@ -233,6 +291,25 @@ QFrame#StressPanel, QFrame#StressFilterBar {
     background: #FFFFFF;
     border: 1px solid #D8E0EB;
     border-radius: 8px;
+}
+
+QFrame#HeaderSeparator {
+    color: #D8E0EB;
+    max-width: 1px;
+}
+
+QToolButton#HeaderFolderButton, QToolButton#DetailsToggle {
+    background: #FFFFFF;
+    border: 1px solid #D0D5DD;
+    border-radius: 6px;
+    color: #344054;
+    padding: 4px 6px;
+}
+
+QToolButton#HeaderFolderButton:hover, QToolButton#DetailsToggle:hover {
+    background: #EFF4FF;
+    border-color: #84ADFF;
+    color: #155EEF;
 }
 
 QTableWidget#StressTable {
@@ -305,6 +382,25 @@ QFrame#MetricCard {
     background: #FFFFFF;
     border: 1px solid #D8E0EB;
     border-radius: 9px;
+}
+
+QFrame#WifiMetricCard, QFrame#WifiMiniMonitor {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 7px;
+}
+
+QLabel#WifiMetricValue {
+    color: #182230;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+QPlainTextEdit#WifiCommand {
+    background: #F2F4F7;
+    border: 1px solid #D8E0EB;
+    border-radius: 4px;
+    font-family: "DejaVu Sans Mono", monospace;
 }
 
 QLabel#MetricLabel {

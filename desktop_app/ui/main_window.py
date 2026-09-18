@@ -23,11 +23,13 @@ from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
+from desktop_app.ui.audio_page import AudioPage
 from desktop_app.ui.ai_page import AiPage
 from desktop_app.ui.bluetooth_page import BluetoothPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 from desktop_app.ui.system_stress_page import SystemStressPage
+from desktop_app.ui.wifi_page import WifiPage
 from devices.livox.profile import load_default_livox_profile
 from devices.livox.testing import (
     LidarTestExecutionService,
@@ -59,6 +61,7 @@ class MainWindow(QMainWindow):
         ("◉", "Dashboard"),
         ("▦", "Devices"),
         ("▣", "Camera"),
+        ("♫", "Audio"),
         ("✦", "AI"),
         ("◌", "LiDAR"),
         ("◉", "Bluetooth"),
@@ -70,6 +73,7 @@ class MainWindow(QMainWindow):
         ("□", "Evidence"),
         ("▤", "Reports"),
         ("⚙", "Settings"),
+        ("▰", "Wi-Fi"),
         ("◫", "Stress Test"),
     ]
 
@@ -197,9 +201,15 @@ class MainWindow(QMainWindow):
                 self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
             elif index == 3:
+                self.audio_page = AudioPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.audio_page)
+            elif index == 4:
                 self.ai_page = AiPage(self.jetson_state, self.jetson_service)
                 self.pages.addWidget(self.ai_page)
-            elif index == 4:
+            elif index == 5:
                 self.lidar_page = LidarPage(
                     self.jetson_state,
                     self.jetson_service,
@@ -212,7 +222,7 @@ class MainWindow(QMainWindow):
                     network_profile=self.livox_network_profile,
                 )
                 self.pages.addWidget(self.lidar_page)
-            elif index == 5:
+            elif index == 6:
                 self.bluetooth_page = BluetoothPage(
                     self.jetson_state,
                     self.jetson_service,
@@ -228,6 +238,9 @@ class MainWindow(QMainWindow):
                     self.navigate_to
                 )
                 self.pages.addWidget(self.system_stress_page)
+            elif self.NAV_ITEMS[index][1] == "Wi-Fi":
+                self.wifi_page = WifiPage(self.jetson_service)
+                self.pages.addWidget(self.wifi_page)
             else:
                 title, subtitle = placeholders[index]
                 self.pages.addWidget(PlaceholderPage(title, subtitle))
@@ -262,6 +275,8 @@ class MainWindow(QMainWindow):
             self.lidar_page.shutdown()
         if hasattr(self, "system_stress_page"):
             self.system_stress_page.shutdown()
+        if hasattr(self, "audio_page"):
+            self.audio_page.shutdown()
         if hasattr(self, "ai_page") and self.ai_page._worker and self.ai_page._worker.isRunning():
             event.ignore()
             self.ai_page.cancel()

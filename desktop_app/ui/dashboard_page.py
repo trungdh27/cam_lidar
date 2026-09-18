@@ -100,12 +100,12 @@ class DashboardPage(QWidget):
     COMPACT_BREAKPOINT = 920
 
     DEVICE_TYPES = [
-        ("▣", "Camera", 2, False),
-        ("◌", "LiDAR", 4, True),
-        ("⌘", "IMU", 6, False),
-        ("▤", "CAN", 7, False),
-        ("⌘", "EtherCAT", 8, False),
-    ]
+    ("▣", "Camera", 2, False),
+    ("◌", "LiDAR", 5, True),
+    ("⌘", "IMU", 7, False),
+    ("▤", "CAN", 8, False),
+    ("⌘", "EtherCAT", 9, False),
+]
 
     AVAILABLE_VALUES = {
         "detected": "Detected",

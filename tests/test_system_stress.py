@@ -445,11 +445,26 @@ class QtStressTests(unittest.TestCase):
             self.assertIs(page.tabs.widget(0), page.pretest_page)
             page.close()
 
-    def test_compact_session_header_and_catalog_details_default_state(self):
+    def test_compact_header_has_status_fields_folder_menu_and_no_session_strip(self):
         with tempfile.TemporaryDirectory() as directory:
             page = SystemStressPage(evidence_root=directory)
-            cards = [frame for frame in page.findChildren(QFrame) if frame.objectName() == "StressPanel"]
-            self.assertIn(108, [card.maximumHeight() for card in cards])
+            page.resize(1200, 800)
+            page.show()
+            self.app.processEvents()
+            self.assertFalse(hasattr(page, "session_label"))
+            self.assertFalse(hasattr(page, "select_folder_button"))
+            self.assertFalse(hasattr(page, "default_folder_button"))
+            self.assertFalse(hasattr(page, "open_folder_button"))
+            self.assertEqual(
+                [action.text() for action in page.folder_menu.actions() if not action.isSeparator()],
+                ["Change Folder", "Use Default Folder", "Open Folder"],
+            )
+            self.assertEqual(page.root_label.toolTip(), directory)
+            self.assertEqual(page.dut_status_label.text(), "DISCONNECTED")
+            self.assertLess(
+                sum(page.tabs.tabBar().tabRect(index).width() for index in range(page.tabs.count())),
+                page.tabs.width() // 2,
+            )
             self.assertEqual(page.vd_page.details_view.toPlainText(), "")
             self.assertEqual(
                 page.vd_page.details_view.placeholderText(),
@@ -465,9 +480,40 @@ class QtStressTests(unittest.TestCase):
             page = SystemStressPage(evidence_root=directory)
             self.assertTrue(page.pretest_page.dut_label.isHidden())
             self.assertIn("Select a check", page.pretest_page.detail_area.toPlainText())
-            page.pretest_page.view_details_button.click()
-            self.assertEqual(page.pretest_page.pretest_detail_tabs.currentIndex(), 1)
+            self.assertFalse(hasattr(page.pretest_page, "view_details_button"))
+            self.assertEqual(page.pretest_page.run_baseline_button.text(), "RUN BASELINE")
+            self.assertLessEqual(page.pretest_page.run_baseline_button.parentWidget().maximumHeight(), 82)
             self.assertIn("Run the baseline checks", page.pretest_page.dut_info_view.toPlainText())
+            page.close()
+
+    def test_folder_menu_changes_path_and_elides_with_full_tooltip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            selected = Path(directory) / ("long_evidence_segment_" * 8)
+            page = SystemStressPage(evidence_root=directory)
+            page.resize(920, 700)
+            page.show()
+            self.app.processEvents()
+            with patch(
+                "desktop_app.ui.system_stress_page.QFileDialog.getExistingDirectory",
+                return_value=str(selected),
+            ):
+                page.change_folder_action.trigger()
+            self.app.processEvents()
+            self.assertEqual(page.session_manager.evidence_root, selected.resolve())
+            self.assertEqual(page.root_label.toolTip(), str(selected.resolve()))
+            self.assertIn("…", page.root_label.text())
+            with patch(
+                "desktop_app.ui.system_stress_page.Path.home", return_value=Path(directory)
+            ):
+                page.default_folder_action.trigger()
+            expected_default = (Path(directory) / "Stress_Test_Logs").resolve()
+            self.assertEqual(page.session_manager.evidence_root, expected_default)
+            with patch(
+                "desktop_app.ui.system_stress_page.QDesktopServices.openUrl",
+                return_value=True,
+            ) as open_url:
+                page.open_folder_action.trigger()
+            open_url.assert_called_once()
             page.close()
 
     def test_15_16_details_and_dynamic_evidence_plan_render(self):
@@ -543,17 +589,17 @@ class QtStressTests(unittest.TestCase):
             page.vd_page.table.sortItems(1, Qt.SortOrder.DescendingOrder)
             self.assertNotEqual(page.vd_page.table.item(0, 1).text(), source_order[0])
             self.assertEqual([item.test_id for item in page.catalog.definitions], source_order)
-            page.vd_page.column_actions[2].setChecked(False)
-            self.assertTrue(page.vd_page.table.isColumnHidden(2))
-            page.vd_page.column_actions[2].setChecked(True)
-            self.assertFalse(page.vd_page.table.isColumnHidden(2))
+            page.vd_page.column_actions[3].setChecked(False)
+            self.assertTrue(page.vd_page.table.isColumnHidden(3))
+            page.vd_page.column_actions[3].setChecked(True)
+            self.assertFalse(page.vd_page.table.isColumnHidden(3))
             page.catalog.definitions[0].runtime_status = RuntimeStatus.RUNNING
             page.vd_page.refresh_button.click()
             self.assertEqual(page.catalog.definitions[0].runtime_status, RuntimeStatus.RUNNING)
             self.assertIn("Total 100", page.vd_page.selected_label.text())
             page.close()
 
-    def test_pretest_failure_is_actionable_and_table_height_adapts(self):
+    def test_pretest_failure_is_actionable_and_workspace_keeps_available_height(self):
         with tempfile.TemporaryDirectory() as directory:
             page = SystemStressPage(evidence_root=directory)
             result = ReadinessResult(
@@ -566,10 +612,45 @@ class QtStressTests(unittest.TestCase):
             page.session_manager.create_session("VD")
             page.pretest_page._completed(result)
             page.pretest_page.check_table.selectRow(0)
-            self.assertLess(page.pretest_page.check_table.maximumHeight(), 100)
+            self.assertGreater(page.pretest_page.check_table.maximumHeight(), 100)
             self.assertFalse(page.pretest_page.go_dashboard_button.isHidden())
             self.assertFalse(page.pretest_page.override_button.isHidden())
             self.assertIn("Dashboard", page.pretest_page.detail_area.toPlainText())
+            page.close()
+
+    def test_compact_table_select_all_header_and_collapsible_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = SystemStressPage(evidence_root=directory)
+            page.resize(1200, 800)
+            page.show()
+            page.tabs.setCurrentIndex(1)
+            self.app.processEvents()
+            table = page.vd_page.table
+            self.assertEqual(
+                [table.horizontalHeaderItem(column).text() for column in range(7)],
+                ["", "Test ID", "Test Name", "Group", "Duration", "Severity", "Status"],
+            )
+            self.assertLessEqual(table.columnWidth(0), 34)
+            self.assertEqual(table.horizontalHeader().height(), 34)
+            self.assertEqual(table.verticalHeader().defaultSectionSize(), 32)
+            page.vd_page.select_all_header.toggled.emit(True)
+            self.assertTrue(
+                all(table.item(row, 0).checkState() == Qt.CheckState.Checked for row in range(table.rowCount()))
+            )
+            page.vd_page.select_all_header.toggled.emit(False)
+            table.selectRow(0)
+            self.app.processEvents()
+            selected_id = page.vd_page._definition_for_row(table.currentRow()).test_id
+            self.assertIn(selected_id, page.vd_page.details_view.toPlainText())
+            page.vd_page.collapse_details_button.click()
+            self.app.processEvents()
+            self.assertTrue(page.vd_page.details_panel.isHidden())
+            self.assertEqual(page.vd_page._definition_for_row(table.currentRow()).test_id, selected_id)
+            self.assertLessEqual(page.vd_page.catalog_splitter.sizes()[1], 40)
+            page.vd_page.expand_details_button.click()
+            self.app.processEvents()
+            self.assertFalse(page.vd_page.details_panel.isHidden())
+            self.assertEqual(page.vd_page._definition_for_row(table.currentRow()).test_id, selected_id)
             page.close()
 
     def test_filters_update_vd_table(self):
