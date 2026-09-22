@@ -94,6 +94,47 @@ class AudioPlaybackFile:
 
 
 @dataclass(frozen=True)
+class RespeakerPcm1State:
+    """Parsed state for the XVF3800's additional mono playback control."""
+
+    level_percent: int | None = None
+    switch_on: bool | None = None
+    raw_value: int | None = None
+    raw_min: int | None = None
+    raw_max: int | None = None
+
+
+@dataclass(frozen=True)
+class RespeakerMixerResult:
+    """Outcome of a best-effort reSpeaker PCM,1 initialization check."""
+
+    detected: bool
+    card_index: int | None = None
+    card_name: str | None = None
+    pcm1_available: bool = False
+    pcm0_available: bool = False
+    pcm0_level_percent: int | None = None
+    pcm0_switch_on: bool | None = None
+    current_level_percent: int | None = None
+    final_level_percent: int | None = None
+    switch_on: bool | None = None
+    changed: bool = False
+    switch_changed: bool = False
+    warning: str | None = None
+    messages: tuple[str, ...] = ()
+    control: str = "PCM,1"
+    ready: bool = False
+
+
+@dataclass(frozen=True)
+class AudioPlaybackPreparation:
+    """Validated playback file plus the hardware mixer preflight result."""
+
+    playback_file: AudioPlaybackFile
+    mixer: RespeakerMixerResult
+
+
+@dataclass(frozen=True)
 class AudioSpeakerTestPreparation:
     """Fresh output information and command selected for a speaker test."""
 
@@ -109,6 +150,7 @@ class AudioSpeakerTestPreparation:
     prompt_source_rates: tuple[int, ...] = ()
     prompt_resampled: bool = False
     prompt_cache_reused: bool = False
+    hardware_mixer: RespeakerMixerResult | None = None
 
     def as_dict(self) -> dict[str, object | None]:
         return {
@@ -124,6 +166,22 @@ class AudioSpeakerTestPreparation:
             "prompt_source_rates": list(self.prompt_source_rates),
             "prompt_resampled": self.prompt_resampled,
             "prompt_cache_reused": self.prompt_cache_reused,
+            "hardware_mixer": (
+                {
+                    "detected": self.hardware_mixer.detected,
+                    "card_index": self.hardware_mixer.card_index,
+                    "card_name": self.hardware_mixer.card_name,
+                    "control": self.hardware_mixer.control,
+                    "pcm1_available": self.hardware_mixer.pcm1_available,
+                    "ready": self.hardware_mixer.ready,
+                    "pcm0_available": self.hardware_mixer.pcm0_available,
+                    "pcm0_level_percent": self.hardware_mixer.pcm0_level_percent,
+                    "level_percent": self.hardware_mixer.final_level_percent,
+                    "changed": self.hardware_mixer.changed,
+                }
+                if self.hardware_mixer
+                else None
+            ),
         }
 
 
@@ -627,6 +685,82 @@ def parse_alsa_cards(output: str) -> list[str]:
                 description = description.rsplit(" - ", 1)[1].strip()
             cards.append(f"Card {match.group(1)}: {description}")
     return cards
+
+
+RESPEAKER_CARD_NAME = "reSpeaker XVF3800 4-Mic Array"
+
+
+def _compact_alsa_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+
+def parse_respeaker_alsa_card(output: str) -> tuple[int, str] | None:
+    """Find the reSpeaker card without relying on its ALSA card index."""
+    target = _compact_alsa_name(RESPEAKER_CARD_NAME)
+    card_pattern = re.compile(r"^\s*(\d+)\s+\[([^\]]+)\]\s*:\s*(.+)$")
+    current: tuple[int, str, list[str]] | None = None
+    entries: list[tuple[int, str, list[str]]] = []
+    for line in output.splitlines():
+        match = card_pattern.match(line)
+        if match:
+            if current is not None:
+                entries.append(current)
+            current = (int(match.group(1)), match.group(3).strip(), [line])
+        elif current is not None:
+            current[2].append(line)
+    if current is not None:
+        entries.append(current)
+
+    for card_index, description, lines in entries:
+        block = " ".join(lines)
+        if target not in _compact_alsa_name(block):
+            continue
+        card_name = description.rsplit(" - ", 1)[-1].strip()
+        return card_index, card_name or RESPEAKER_CARD_NAME
+    return None
+
+
+def has_respeaker_pcm1_control(output: str) -> bool:
+    """Return whether ``amixer scontrols`` exposes only the desired PCM,1."""
+    return has_respeaker_pcm_control(output, 1)
+
+
+def has_respeaker_pcm_control(output: str, index: int) -> bool:
+    """Return whether a named PCM playback control exists."""
+    return any(
+        re.search(
+            rf"Simple mixer control\s+'PCM',\s*{index}\b", line, re.IGNORECASE
+        )
+        for line in output.splitlines()
+    )
+
+
+def parse_respeaker_pcm1_state(output: str) -> RespeakerPcm1State:
+    """Parse the mono PCM,1 playback level and optional switch state."""
+    limits_match = re.search(
+        r"Limits:\s*Playback\s+(-?\d+)\s*-\s*(-?\d+)", output, re.IGNORECASE
+    )
+    raw_min = int(limits_match.group(1)) if limits_match else None
+    raw_max = int(limits_match.group(2)) if limits_match else None
+    playback_lines = [line for line in output.splitlines() if "playback" in line.casefold()]
+    playback_text = " ".join(playback_lines) or output
+    raw_match = re.search(r"(?:Mono\s*:\s*)?Playback\s+(-?\d+)", playback_text, re.IGNORECASE)
+    raw_value = int(raw_match.group(1)) if raw_match else None
+    percent_match = re.search(r"\[(-?\d+)%\]", playback_text)
+    level_percent = int(percent_match.group(1)) if percent_match else None
+    if level_percent is None and raw_value is not None and raw_min is not None and raw_max is not None:
+        span = raw_max - raw_min
+        if span > 0:
+            level_percent = round((raw_value - raw_min) * 100 / span)
+    switch_match = re.search(r"\[(on|off)\]", playback_text, re.IGNORECASE)
+    switch_on = switch_match.group(1).casefold() == "on" if switch_match else None
+    return RespeakerPcm1State(
+        level_percent=level_percent,
+        switch_on=switch_on,
+        raw_value=raw_value,
+        raw_min=raw_min,
+        raw_max=raw_max,
+    )
 
 
 def parse_alsa_devices(output: str) -> list[str]:

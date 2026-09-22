@@ -44,6 +44,7 @@ from desktop_app.audio.audio_models import (
     preferred_recording_configuration,
 )
 from desktop_app.state.jetson_state import JetsonState
+from desktop_app.ui.audio_automated_page import AudioAutomatedPage
 from desktop_app.ui.widgets import Card, StatusChip
 
 
@@ -106,6 +107,7 @@ class AudioPage(QWidget):
         self.audio_manager.playback_stopped.connect(self._on_playback_stopped)
         self.audio_manager.playback_failed.connect(self._on_playback_failed)
         self.audio_manager.playback_output.connect(self._on_playback_output)
+        self.audio_manager.hardware_mixer_status.connect(self._on_hardware_mixer_status)
         self.audio_manager.playback_disconnected.connect(self._on_playback_disconnected)
         self.audio_manager.recording_state_changed.connect(self._on_recording_state_changed)
         self.audio_manager.recording_started.connect(self._on_recording_started)
@@ -137,7 +139,7 @@ class AudioPage(QWidget):
         title_column.setSpacing(2)
         title = QLabel("Audio Test")
         title.setObjectName("PageTitle")
-        subtitle = QLabel("Manual Jetson audio validation")
+        subtitle = QLabel("Manual and automated Jetson audio validation")
         subtitle.setObjectName("Muted")
         title_column.addWidget(title)
         title_column.addWidget(subtitle)
@@ -196,7 +198,17 @@ class AudioPage(QWidget):
         content_layout.setColumnStretch(0, 55)
         content_layout.setColumnStretch(1, 45)
         scroll_area.setWidget(content)
-        root.addWidget(scroll_area, 1)
+        self.audio_tabs = QTabWidget()
+        self.audio_tabs.setObjectName("AudioTestTabs")
+        self.audio_tabs.addTab(scroll_area, "Manual Test")
+        self.automated_page = AudioAutomatedPage(
+            self.audio_manager,
+            self.jetson_service,
+            source_provider=lambda: self._current_default_source,
+            parent=self.audio_tabs,
+        )
+        self.audio_tabs.addTab(self.automated_page, "Automated Test")
+        root.addWidget(self.audio_tabs, 1)
 
         devices_card = Card("Audio Devices")
         self._set_card_accent(devices_card, "blue")
@@ -636,6 +648,8 @@ class AudioPage(QWidget):
 
     def _on_jetson_state_changed(self, _state: JetsonState) -> None:
         connected = self.jetson_service.is_connected
+        if hasattr(self, "automated_page"):
+            self.automated_page.set_connected(connected)
         if not connected and self.evidence_manager.is_active and not self.evidence_manager.is_interrupted:
             self.evidence_manager.mark_interrupted("Jetson disconnected during Audio session.")
         self.connection_chip.set_state(
@@ -1256,6 +1270,10 @@ class AudioPage(QWidget):
 
     def _on_playback_output(self, message: str) -> None:
         self.append_log(message)
+
+    def _on_hardware_mixer_status(self, result) -> None:
+        for message in getattr(result, "messages", ()):
+            self.append_log(message)
 
     def _on_playback_disconnected(self) -> None:
         operation = self._current_playback_evidence_operation()

@@ -7,6 +7,7 @@ from desktop_app.audio.audio_models import (
     AudioPlaybackFile,
     AudioVolumeState,
 )
+from desktop_app.audio.audio_automation import AudioActionResult, AudioExecutionLogger, AudioLogEvent
 
 __all__ = (
     "AudioDevice",
@@ -14,6 +15,9 @@ __all__ = (
     "AudioRoutingResult",
     "AudioPlaybackFile",
     "AudioVolumeState",
+    "AudioActionResult",
+    "AudioExecutionLogger",
+    "AudioLogEvent",
     "AudioManager",
 )
 

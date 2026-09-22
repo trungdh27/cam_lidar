@@ -112,6 +112,25 @@ QTabWidget#AudioAdvancedTabs QTabBar::tab:selected {
     border-bottom: 2px solid #155EEF;
 }
 
+QTabWidget#AudioTestTabs::pane {
+    border: 1px solid #D8E0EB;
+    background: #FFFFFF;
+}
+
+QTabWidget#AudioTestTabs QTabBar::tab {
+    background: #EEF2F7;
+    border: 1px solid #D8E0EB;
+    padding: 6px 11px;
+    color: #475467;
+    font-weight: 600;
+}
+
+QTabWidget#AudioTestTabs QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #155EEF;
+    border-bottom: 2px solid #155EEF;
+}
+
 QLabel#CardTitle {
     font-size: 14px;
     font-weight: 700;
