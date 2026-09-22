@@ -10,12 +10,25 @@ from pathlib import PurePosixPath
 
 
 @dataclass(frozen=True)
+class PulseAudioSampleSpec:
+    """Structured PulseAudio sample specification."""
+
+    sample_format: str | None
+    channels: int | None
+    sample_rate_hz: int | None
+
+
+@dataclass(frozen=True)
 class AudioDevice:
     """A PulseAudio-compatible device and a label suitable for the UI."""
 
     identifier: str
     display_name: str
     index: int | None = None
+    sample_format: str | None = None
+    channels: int | None = None
+    sample_rate_hz: int | None = None
+    state: str | None = None
 
     @property
     def name(self) -> str:
@@ -80,6 +93,98 @@ class AudioPlaybackFile:
     size_bytes: int | None = None
 
 
+@dataclass(frozen=True)
+class RespeakerPcm1State:
+    """Parsed state for the XVF3800's additional mono playback control."""
+
+    level_percent: int | None = None
+    switch_on: bool | None = None
+    raw_value: int | None = None
+    raw_min: int | None = None
+    raw_max: int | None = None
+
+
+@dataclass(frozen=True)
+class RespeakerMixerResult:
+    """Outcome of a best-effort reSpeaker PCM,1 initialization check."""
+
+    detected: bool
+    card_index: int | None = None
+    card_name: str | None = None
+    pcm1_available: bool = False
+    pcm0_available: bool = False
+    pcm0_level_percent: int | None = None
+    pcm0_switch_on: bool | None = None
+    current_level_percent: int | None = None
+    final_level_percent: int | None = None
+    switch_on: bool | None = None
+    changed: bool = False
+    switch_changed: bool = False
+    warning: str | None = None
+    messages: tuple[str, ...] = ()
+    control: str = "PCM,1"
+    ready: bool = False
+
+
+@dataclass(frozen=True)
+class AudioPlaybackPreparation:
+    """Validated playback file plus the hardware mixer preflight result."""
+
+    playback_file: AudioPlaybackFile
+    mixer: RespeakerMixerResult
+
+
+@dataclass(frozen=True)
+class AudioSpeakerTestPreparation:
+    """Fresh output information and command selected for a speaker test."""
+
+    command: str
+    output_name: str | None
+    output_display_name: str | None
+    sample_format: str | None
+    channels: int | None
+    native_sample_rate_hz: int | None
+    command_rate_hz: int | None
+    warning: str | None = None
+    prompt_directory: str | None = None
+    prompt_source_rates: tuple[int, ...] = ()
+    prompt_resampled: bool = False
+    prompt_cache_reused: bool = False
+    hardware_mixer: RespeakerMixerResult | None = None
+
+    def as_dict(self) -> dict[str, object | None]:
+        return {
+            "command": self.command,
+            "output": self.output_name,
+            "output_display": self.output_display_name,
+            "sample_format": self.sample_format,
+            "channels": self.channels,
+            "native_sample_rate_hz": self.native_sample_rate_hz,
+            "command_rate_hz": self.command_rate_hz,
+            "warning": self.warning,
+            "prompt_directory": self.prompt_directory,
+            "prompt_source_rates": list(self.prompt_source_rates),
+            "prompt_resampled": self.prompt_resampled,
+            "prompt_cache_reused": self.prompt_cache_reused,
+            "hardware_mixer": (
+                {
+                    "detected": self.hardware_mixer.detected,
+                    "card_index": self.hardware_mixer.card_index,
+                    "card_name": self.hardware_mixer.card_name,
+                    "control": self.hardware_mixer.control,
+                    "pcm1_available": self.hardware_mixer.pcm1_available,
+                    "ready": self.hardware_mixer.ready,
+                    "pcm0_available": self.hardware_mixer.pcm0_available,
+                    "pcm0_level_percent": self.hardware_mixer.pcm0_level_percent,
+                    "level_percent": self.hardware_mixer.final_level_percent,
+                    "changed": self.hardware_mixer.changed,
+                }
+                if self.hardware_mixer
+                else None
+            ),
+        }
+
+
 class RecordingState(str, Enum):
     """Lifecycle states for the managed microphone recording process."""
 
@@ -91,6 +196,13 @@ class RecordingState(str, Enum):
     COMPLETED = "Completed"
     FAILED = "Failed"
     DISCONNECTED = "Disconnected"
+
+
+class PlaybackSource(str, Enum):
+    """Origin of the single managed Audio playback process."""
+
+    NORMAL_FILE = "normal_file"
+    RECORDED_FILE = "recorded_file"
 
 
 @dataclass(frozen=True)
@@ -116,10 +228,56 @@ class AudioRecordingVerification:
     error: str | None = None
 
 
-RECORDING_SAMPLE_RATES = (16000, 48000)
+RECORDING_SAMPLE_RATES = (
+    8000,
+    11025,
+    16000,
+    22050,
+    32000,
+    44100,
+    48000,
+    88200,
+    96000,
+    176400,
+    192000,
+)
 RECORDING_CHANNELS = (1, 2, 4, 6)
 RECORDING_FORMATS = {"S16_LE": "s16le"}
 MINIMUM_WAV_BYTES = 44
+MIN_AUDIO_SAMPLE_RATE_HZ = 8000
+MAX_AUDIO_SAMPLE_RATE_HZ = 192000
+
+
+def validate_audio_sample_rate(sample_rate_hz: int) -> int:
+    """Validate a discovered rate before placing it in a remote command."""
+    if (
+        isinstance(sample_rate_hz, bool)
+        or not isinstance(sample_rate_hz, int)
+        or not MIN_AUDIO_SAMPLE_RATE_HZ <= sample_rate_hz <= MAX_AUDIO_SAMPLE_RATE_HZ
+    ):
+        raise ValueError("Audio sample rate must be an integer between 8000 and 192000 Hz.")
+    return sample_rate_hz
+
+
+def parse_pulse_sample_spec(value: str) -> PulseAudioSampleSpec | None:
+    """Parse common PulseAudio specs such as ``s16le 2ch 16000Hz``."""
+    if not isinstance(value, str):
+        return None
+    match = re.search(
+        r"(?P<format>[A-Za-z0-9_]+)\s+"
+        r"(?P<channels>\d+)ch\s+"
+        r"(?P<rate>\d+)Hz\b",
+        value,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    sample_format = match.group("format").lower()
+    channels = int(match.group("channels"))
+    sample_rate_hz = int(match.group("rate"))
+    if channels <= 0 or sample_rate_hz <= 0:
+        return None
+    return PulseAudioSampleSpec(sample_format, channels, sample_rate_hz)
 
 
 def parse_sink_volume(output: str) -> int | None:
@@ -195,9 +353,44 @@ def quote_remote_path(path: str) -> str:
     return shlex.quote(path)
 
 
-def build_recording_command(config: AudioRecordingConfig) -> str:
+def normalize_remote_audio_path(path: str, remote_home: str) -> str:
+    """Return an absolute remote path for an audio file.
+
+    ``remote_home`` is obtained from the connected Jetson; it is never inferred
+    from the local machine or hard-coded to a particular user.
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("Remote audio path must be a non-empty string.")
+    if not isinstance(remote_home, str) or not remote_home.strip():
+        raise ValueError("Remote home directory is unavailable.")
+    normalized_path = path.strip()
+    normalized_home = remote_home.strip()
+    if "\n" in normalized_path or "\r" in normalized_path or "\x00" in normalized_path:
+        raise ValueError("Remote audio path must be a single-line path.")
+    if "\n" in normalized_home or "\r" in normalized_home or "\x00" in normalized_home:
+        raise ValueError("Remote home directory must be a single-line path.")
+    if not normalized_home.startswith("/"):
+        raise ValueError("Remote home directory must be absolute.")
+    if normalized_path.startswith("/"):
+        return normalized_path
+    if normalized_path == "~":
+        relative_path = ""
+    elif normalized_path.startswith("~/"):
+        relative_path = normalized_path[2:]
+    else:
+        relative_path = normalized_path
+    return str(PurePosixPath(normalized_home) / relative_path) if relative_path else str(PurePosixPath(normalized_home))
+
+
+def build_recording_command(
+    config: AudioRecordingConfig,
+    remote_home: str | None = None,
+) -> str:
     """Build a safely quoted PulseAudio-compatible ``parecord`` command."""
     config = validate_recording_config(config)
+    output_path = normalize_remote_audio_path(config.output_path, remote_home) if remote_home else config.output_path
+    if not output_path.startswith("/"):
+        raise ValueError("Recording output path must be absolute before command construction.")
     return (
         "parecord "
         f"--device={shlex.quote(config.source_name)} "
@@ -205,7 +398,7 @@ def build_recording_command(config: AudioRecordingConfig) -> str:
         f"--format={RECORDING_FORMATS[config.sample_format]} "
         f"--rate={config.sample_rate} "
         f"--channels={config.channels} "
-        f"{quote_remote_path(config.output_path)}"
+        f"{shlex.quote(output_path)}"
     )
 
 
@@ -262,7 +455,7 @@ def readable_device_name(identifier: str) -> str:
 
 
 def parse_pactl_short_devices(output: str) -> list[AudioDevice]:
-    """Parse `pactl list short sinks|sources` while retaining identifiers."""
+    """Parse short sink/source rows, including sample spec and state."""
     devices: list[AudioDevice] = []
     seen: set[str] = set()
     for line in output.splitlines():
@@ -279,7 +472,27 @@ def parse_pactl_short_devices(output: str) -> list[AudioDevice]:
             index = int(columns[0])
         except (TypeError, ValueError):
             index = None
-        devices.append(AudioDevice(identifier, readable_device_name(identifier), index))
+        sample_spec = parse_pulse_sample_spec(line)
+        state = None
+        if sample_spec:
+            spec_match = re.search(
+                r"[A-Za-z0-9_]+\s+\d+ch\s+\d+Hz\b.*?(?:\s+)(\S+)\s*$",
+                line,
+                re.IGNORECASE,
+            )
+            if spec_match:
+                state = spec_match.group(1)
+        devices.append(
+            AudioDevice(
+                identifier,
+                readable_device_name(identifier),
+                index,
+                sample_spec.sample_format if sample_spec else None,
+                sample_spec.channels if sample_spec else None,
+                sample_spec.sample_rate_hz if sample_spec else None,
+                state,
+            )
+        )
     return devices
 
 
@@ -293,11 +506,16 @@ def parse_pactl_devices(output: str) -> list[AudioDevice]:
         if not block.get("name"):
             return
         identifier = block["name"]
+        sample_spec = parse_pulse_sample_spec(block.get("sample specification", ""))
         devices.append(
             AudioDevice(
                 identifier,
                 block.get("description") or readable_device_name(identifier),
                 index,
+                sample_spec.sample_format if sample_spec else None,
+                sample_spec.channels if sample_spec else None,
+                sample_spec.sample_rate_hz if sample_spec else None,
+                block.get("state"),
             )
         )
 
@@ -309,8 +527,14 @@ def parse_pactl_devices(output: str) -> list[AudioDevice]:
             index = int(header.group(1))
             continue
         key, separator, value = line.partition(":")
-        if separator and key.strip().casefold() in {"name", "description"}:
-            block[key.strip().casefold()] = value.strip()
+        normalized_key = key.strip().casefold().replace("_", " ")
+        if separator and normalized_key in {
+            "name",
+            "description",
+            "sample specification",
+            "state",
+        }:
+            block[normalized_key] = value.strip()
     finish()
     return devices
 
@@ -321,6 +545,16 @@ def resolve_device_description(devices: list[AudioDevice], name: str | None) -> 
         return None
     device = next((item for item in devices if item.name == name), None)
     return device.description if device else None
+
+
+def preferred_recording_configuration(
+    device: AudioDevice | None,
+) -> tuple[int | None, int | None, str | None]:
+    """Return native recording preferences supported by the current GUI."""
+    if device is None:
+        return None, None, None
+    sample_format = "S16_LE" if device.sample_format == "s16le" else None
+    return device.sample_rate_hz, device.channels, sample_format
 
 
 def build_default_sink_command(sink_name: str) -> str:
@@ -343,9 +577,78 @@ def validate_playback_path(path: str) -> str:
     return normalized
 
 
-def build_playback_command(path: str) -> str:
-    """Build a safely quoted paplay command for a validated remote path."""
-    return f"paplay {shlex.quote(validate_playback_path(path))}"
+def build_playback_command(path: str, remote_home: str | None = None) -> str:
+    """Build a safely quoted paplay command for an absolute remote path."""
+    normalized_path = validate_playback_path(path)
+    if not normalized_path.startswith("/"):
+        if remote_home is None:
+            raise ValueError("Playback path must be absolute before command construction.")
+        normalized_path = normalize_remote_audio_path(normalized_path, remote_home)
+    return f"paplay {shlex.quote(normalized_path)}"
+
+
+def build_speaker_channel_test_command(
+    sample_rate_hz: int | None = None,
+    prompt_directory: str | None = None,
+) -> str:
+    """Build a PulseAudio-routed spoken left/right WAV test."""
+    rate_option = ""
+    if sample_rate_hz is not None:
+        rate_option = f" -r {validate_audio_sample_rate(sample_rate_hz)}"
+    prompt_option = ""
+    if prompt_directory is not None:
+        if (
+            not isinstance(prompt_directory, str)
+            or not prompt_directory.strip()
+            or not prompt_directory.startswith("/")
+            or "\n" in prompt_directory
+            or "\r" in prompt_directory
+            or "\x00" in prompt_directory
+        ):
+            raise ValueError("Speaker-test prompt directory must be an absolute path.")
+        prompt_option = f" -W {shlex.quote(prompt_directory)}"
+    return f"speaker-test -D pulse -c 2{rate_option} -t wav{prompt_option} -l 1"
+
+
+def prepare_speaker_channel_test(
+    default_sink: str | None,
+    devices: list[AudioDevice],
+    prompt_directory: str | None = None,
+    prompt_source_rates: tuple[int, ...] = (),
+    prompt_resampled: bool = False,
+    prompt_cache_reused: bool = False,
+) -> AudioSpeakerTestPreparation:
+    """Select a fresh sink's native rate without assuming a device identity."""
+    output_device = next(
+        (device for device in devices if device.identifier == default_sink),
+        None,
+    )
+    native_rate = output_device.sample_rate_hz if output_device else None
+    warning = None
+    if native_rate is not None:
+        try:
+            validate_audio_sample_rate(native_rate)
+        except ValueError:
+            native_rate = None
+    if native_rate is None:
+        warning = (
+            "Output native sample rate could not be detected; "
+            "using speaker-test default rate."
+        )
+    return AudioSpeakerTestPreparation(
+        command=build_speaker_channel_test_command(native_rate, prompt_directory),
+        output_name=default_sink,
+        output_display_name=output_device.display_name if output_device else None,
+        sample_format=output_device.sample_format if output_device else None,
+        channels=output_device.channels if output_device else None,
+        native_sample_rate_hz=native_rate,
+        command_rate_hz=native_rate,
+        warning=warning,
+        prompt_directory=prompt_directory,
+        prompt_source_rates=prompt_source_rates,
+        prompt_resampled=prompt_resampled,
+        prompt_cache_reused=prompt_cache_reused,
+    )
 
 
 def playback_file_metadata(path: str, size_bytes: int | None = None) -> AudioPlaybackFile:
@@ -382,6 +685,82 @@ def parse_alsa_cards(output: str) -> list[str]:
                 description = description.rsplit(" - ", 1)[1].strip()
             cards.append(f"Card {match.group(1)}: {description}")
     return cards
+
+
+RESPEAKER_CARD_NAME = "reSpeaker XVF3800 4-Mic Array"
+
+
+def _compact_alsa_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+
+def parse_respeaker_alsa_card(output: str) -> tuple[int, str] | None:
+    """Find the reSpeaker card without relying on its ALSA card index."""
+    target = _compact_alsa_name(RESPEAKER_CARD_NAME)
+    card_pattern = re.compile(r"^\s*(\d+)\s+\[([^\]]+)\]\s*:\s*(.+)$")
+    current: tuple[int, str, list[str]] | None = None
+    entries: list[tuple[int, str, list[str]]] = []
+    for line in output.splitlines():
+        match = card_pattern.match(line)
+        if match:
+            if current is not None:
+                entries.append(current)
+            current = (int(match.group(1)), match.group(3).strip(), [line])
+        elif current is not None:
+            current[2].append(line)
+    if current is not None:
+        entries.append(current)
+
+    for card_index, description, lines in entries:
+        block = " ".join(lines)
+        if target not in _compact_alsa_name(block):
+            continue
+        card_name = description.rsplit(" - ", 1)[-1].strip()
+        return card_index, card_name or RESPEAKER_CARD_NAME
+    return None
+
+
+def has_respeaker_pcm1_control(output: str) -> bool:
+    """Return whether ``amixer scontrols`` exposes only the desired PCM,1."""
+    return has_respeaker_pcm_control(output, 1)
+
+
+def has_respeaker_pcm_control(output: str, index: int) -> bool:
+    """Return whether a named PCM playback control exists."""
+    return any(
+        re.search(
+            rf"Simple mixer control\s+'PCM',\s*{index}\b", line, re.IGNORECASE
+        )
+        for line in output.splitlines()
+    )
+
+
+def parse_respeaker_pcm1_state(output: str) -> RespeakerPcm1State:
+    """Parse the mono PCM,1 playback level and optional switch state."""
+    limits_match = re.search(
+        r"Limits:\s*Playback\s+(-?\d+)\s*-\s*(-?\d+)", output, re.IGNORECASE
+    )
+    raw_min = int(limits_match.group(1)) if limits_match else None
+    raw_max = int(limits_match.group(2)) if limits_match else None
+    playback_lines = [line for line in output.splitlines() if "playback" in line.casefold()]
+    playback_text = " ".join(playback_lines) or output
+    raw_match = re.search(r"(?:Mono\s*:\s*)?Playback\s+(-?\d+)", playback_text, re.IGNORECASE)
+    raw_value = int(raw_match.group(1)) if raw_match else None
+    percent_match = re.search(r"\[(-?\d+)%\]", playback_text)
+    level_percent = int(percent_match.group(1)) if percent_match else None
+    if level_percent is None and raw_value is not None and raw_min is not None and raw_max is not None:
+        span = raw_max - raw_min
+        if span > 0:
+            level_percent = round((raw_value - raw_min) * 100 / span)
+    switch_match = re.search(r"\[(on|off)\]", playback_text, re.IGNORECASE)
+    switch_on = switch_match.group(1).casefold() == "on" if switch_match else None
+    return RespeakerPcm1State(
+        level_percent=level_percent,
+        switch_on=switch_on,
+        raw_value=raw_value,
+        raw_min=raw_min,
+        raw_max=raw_max,
+    )
 
 
 def parse_alsa_devices(output: str) -> list[str]:

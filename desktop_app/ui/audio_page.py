@@ -5,8 +5,11 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -19,12 +22,14 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QTabWidget,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from desktop_app.audio.audio_manager import AudioManager, DISCOVERY_COMMANDS
+from desktop_app.audio.audio_evidence import AudioEvidenceManager, SessionState
 from desktop_app.audio.audio_models import (
     AudioRecordingConfig,
     AudioPlaybackFile,
@@ -32,11 +37,14 @@ from desktop_app.audio.audio_models import (
     RECORDING_CHANNELS,
     RECORDING_FORMATS,
     RECORDING_SAMPLE_RATES,
+    PlaybackSource,
     RecordingState,
     readable_device_name,
     resolve_device_description,
+    preferred_recording_configuration,
 )
 from desktop_app.state.jetson_state import JetsonState
+from desktop_app.ui.audio_automated_page import AudioAutomatedPage
 from desktop_app.ui.widgets import Card, StatusChip
 
 
@@ -48,14 +56,27 @@ class AudioPage(QWidget):
         self.jetson_state = jetson_state
         self.jetson_service = jetson_service
         self.audio_manager = AudioManager(jetson_service, self)
+        self.evidence_manager = AudioEvidenceManager()
         self._last_connected: bool | None = None
         self._has_default_sink = False
+        self._last_confirmed_volume: int | None = None
         self._volume_busy = False
         self._current_default_sink: str | None = None
         self._current_default_source: str | None = None
+        self._recording_native_signature: tuple[object, ...] | None = None
         self._routing_busy_kind: str | None = None
         self._file_validated = False
         self._validated_path: str | None = None
+        self._validated_input_path: str | None = None
+        self._session_baseline_pending = False
+        self._session_volume_baseline_pending = False
+        self._pending_routing_evidence: dict[str, object] = {}
+        self._pending_volume_evidence: dict[str, object] | None = None
+        self._pending_volume_refresh = False
+        self._pending_mute_evidence: str | None = None
+        self._pending_playback_evidence: dict[str, object] = {}
+        self._pending_recording_evidence: dict[str, object] = {}
+        self._pending_speaker_test_evidence = False
         self._recording_elapsed_seconds = 0
         self._recording_elapsed_timer = QTimer(self)
         self._recording_elapsed_timer.setInterval(1000)
@@ -86,6 +107,7 @@ class AudioPage(QWidget):
         self.audio_manager.playback_stopped.connect(self._on_playback_stopped)
         self.audio_manager.playback_failed.connect(self._on_playback_failed)
         self.audio_manager.playback_output.connect(self._on_playback_output)
+        self.audio_manager.hardware_mixer_status.connect(self._on_hardware_mixer_status)
         self.audio_manager.playback_disconnected.connect(self._on_playback_disconnected)
         self.audio_manager.recording_state_changed.connect(self._on_recording_state_changed)
         self.audio_manager.recording_started.connect(self._on_recording_started)
@@ -93,6 +115,13 @@ class AudioPage(QWidget):
         self.audio_manager.recording_failed.connect(self._on_recording_failed)
         self.audio_manager.recording_output.connect(self._on_recording_output)
         self.audio_manager.recording_disconnected.connect(self._on_recording_disconnected)
+        self.audio_manager.speaker_test_state_changed.connect(self._on_speaker_test_state_changed)
+        self.audio_manager.speaker_test_prepared.connect(self._on_speaker_test_prepared)
+        self.audio_manager.speaker_test_started.connect(self._on_speaker_test_started)
+        self.audio_manager.speaker_test_completed.connect(self._on_speaker_test_completed)
+        self.audio_manager.speaker_test_failed.connect(self._on_speaker_test_failed)
+        self.audio_manager.speaker_test_output.connect(self._on_speaker_test_output)
+        self.audio_manager.speaker_test_disconnected.connect(self._on_speaker_test_disconnected)
         self._on_jetson_state_changed(self.jetson_state)
 
     def _build_ui(self) -> None:
@@ -110,7 +139,7 @@ class AudioPage(QWidget):
         title_column.setSpacing(2)
         title = QLabel("Audio Test")
         title.setObjectName("PageTitle")
-        subtitle = QLabel("Manual Jetson audio validation")
+        subtitle = QLabel("Manual and automated Jetson audio validation")
         subtitle.setObjectName("Muted")
         title_column.addWidget(title)
         title_column.addWidget(subtitle)
@@ -119,6 +148,41 @@ class AudioPage(QWidget):
         header_layout.addLayout(title_column, 1)
         header_layout.addWidget(self.connection_chip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header)
+
+        evidence_bar = QFrame()
+        evidence_bar.setObjectName("AudioEvidenceBar")
+        evidence_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        evidence_layout = QHBoxLayout(evidence_bar)
+        evidence_layout.setContentsMargins(4, 2, 4, 2)
+        evidence_layout.setSpacing(8)
+        evidence_layout.addWidget(self._key_label("Evidence:"))
+        self.session_status_chip = StatusChip("Off", "idle")
+        evidence_layout.addWidget(self.session_status_chip)
+        self.session_id_label = self._value_label()
+        self.session_id_label.setText("-")
+        evidence_layout.addWidget(self.session_id_label)
+        evidence_layout.addStretch(1)
+        self.start_session_button = QPushButton("Start Session")
+        self.start_session_button.setObjectName("PrimaryButton")
+        self.start_session_button.clicked.connect(self.start_audio_session)
+        self.end_session_button = QPushButton("End")
+        self.end_session_button.setObjectName("SmallButton")
+        self.end_session_button.setToolTip("End Audio Evidence Session")
+        self.end_session_button.clicked.connect(self.end_audio_session)
+        self.copy_evidence_button = QPushButton("Copy Path")
+        self.copy_evidence_button.setObjectName("SmallButton")
+        self.copy_evidence_button.clicked.connect(self.copy_evidence_path)
+        self.add_note_button = QPushButton("Add Note")
+        self.add_note_button.setObjectName("SmallButton")
+        self.add_note_button.clicked.connect(self.add_session_note)
+        evidence_layout.addWidget(self.start_session_button)
+        evidence_layout.addWidget(self.add_note_button)
+        evidence_layout.addWidget(self.end_session_button)
+        evidence_layout.addWidget(self.copy_evidence_button)
+        root.addWidget(evidence_bar)
 
         scroll_area = QScrollArea()
         scroll_area.setObjectName("AudioScrollArea")
@@ -134,7 +198,17 @@ class AudioPage(QWidget):
         content_layout.setColumnStretch(0, 55)
         content_layout.setColumnStretch(1, 45)
         scroll_area.setWidget(content)
-        root.addWidget(scroll_area, 1)
+        self.audio_tabs = QTabWidget()
+        self.audio_tabs.setObjectName("AudioTestTabs")
+        self.audio_tabs.addTab(scroll_area, "Manual Test")
+        self.automated_page = AudioAutomatedPage(
+            self.audio_manager,
+            self.jetson_service,
+            source_provider=lambda: self._current_default_source,
+            parent=self.audio_tabs,
+        )
+        self.audio_tabs.addTab(self.automated_page, "Automated Test")
+        root.addWidget(self.audio_tabs, 1)
 
         devices_card = Card("Audio Devices")
         self._set_card_accent(devices_card, "blue")
@@ -240,6 +314,10 @@ class AudioPage(QWidget):
 
         volume_card = Card("Speaker Control")
         self._set_card_accent(volume_card, "blue")
+        volume_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         volume_grid = QGridLayout()
         volume_grid.setHorizontalSpacing(10)
         volume_grid.setVerticalSpacing(8)
@@ -267,16 +345,15 @@ class AudioPage(QWidget):
         volume_grid.addWidget(self.volume_output_label, 0, 1)
         volume_grid.addWidget(self._key_label("Volume"), 1, 0)
         volume_grid.addLayout(volume_row, 1, 1)
-        volume_grid.addWidget(self.high_volume_warning, 2, 1)
-        volume_grid.addWidget(self._key_label("State"), 3, 0)
-        volume_grid.addWidget(self.mute_status_chip, 3, 1)
+        volume_grid.addWidget(self._key_label("State"), 2, 0)
+        volume_grid.addWidget(self.mute_status_chip, 2, 1)
         volume_card.body_layout.addLayout(volume_grid)
         volume_buttons = QHBoxLayout()
         self.mute_button = QPushButton("Mute")
         self.mute_button.setObjectName("OutlineButton")
         self.unmute_button = QPushButton("Unmute")
         self.unmute_button.setObjectName("OutlineButton")
-        self.refresh_volume_button = QPushButton("Refresh")
+        self.refresh_volume_button = QPushButton("Refresh Volume")
         self.refresh_volume_button.setObjectName("SmallButton")
         self.mute_button.clicked.connect(self.mute_speaker)
         self.unmute_button.clicked.connect(self.unmute_speaker)
@@ -286,7 +363,13 @@ class AudioPage(QWidget):
         volume_buttons.addStretch()
         volume_buttons.addWidget(self.refresh_volume_button)
         volume_card.body_layout.addLayout(volume_buttons)
-        content_layout.addWidget(volume_card, 1, 0)
+        self.speaker_test_button = QPushButton("Test Left / Right")
+        self.speaker_test_button.setObjectName("SmallButton")
+        self.speaker_test_button.clicked.connect(self.start_speaker_channel_test)
+        volume_card.body_layout.addWidget(self.speaker_test_button)
+        volume_card.body_layout.addWidget(self.high_volume_warning)
+        volume_card.body_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        content_layout.addWidget(volume_card, 1, 0, Qt.AlignmentFlag.AlignTop)
 
         recording_card = Card("Microphone Recording")
         self._set_card_accent(recording_card, "purple")
@@ -345,7 +428,7 @@ class AudioPage(QWidget):
         recording_grid.addWidget(self.recording_status_chip, 5, 1)
         recording_grid.addWidget(self._key_label("Elapsed"), 5, 2)
         recording_grid.addWidget(self.recording_elapsed_label, 5, 3)
-        recording_grid.addWidget(self._key_label("Recorded File"), 6, 0)
+        recording_grid.addWidget(self._key_label("Last Recording"), 6, 0)
         recording_grid.addWidget(self.recorded_file_label, 6, 1, 1, 3)
         recording_grid.addWidget(self._key_label("Size"), 7, 0)
         recording_grid.addWidget(self.recorded_file_size_label, 7, 1, 1, 3)
@@ -361,6 +444,24 @@ class AudioPage(QWidget):
         recording_buttons.addWidget(self.start_recording_button)
         recording_buttons.addWidget(self.stop_recording_button)
         recording_card.body_layout.addLayout(recording_buttons)
+        recorded_playback_buttons = QHBoxLayout()
+        recorded_playback_buttons.addStretch()
+        self.play_recording_button = QPushButton("Play Recording")
+        self.play_recording_button.setObjectName("PrimaryButton")
+        self.play_recording_button.clicked.connect(self.play_recording)
+        self.stop_recording_playback_button = QPushButton("Stop")
+        self.stop_recording_playback_button.setObjectName("DangerButton")
+        self.stop_recording_playback_button.clicked.connect(self.stop_recording_playback)
+        recorded_playback_buttons.addWidget(self.play_recording_button)
+        recorded_playback_buttons.addWidget(self.stop_recording_playback_button)
+        recording_card.body_layout.addLayout(recorded_playback_buttons)
+        recorded_playback_status = QHBoxLayout()
+        recorded_playback_status.addWidget(self._key_label("Playback"))
+        self.recorded_playback_status_chip = StatusChip("Idle", "idle")
+        self.recorded_playback_status_label = self.recorded_playback_status_chip.text_label
+        recorded_playback_status.addWidget(self.recorded_playback_status_chip)
+        recorded_playback_status.addStretch()
+        recording_card.body_layout.addLayout(recorded_playback_status)
         content_layout.addWidget(recording_card, 1, 1)
 
         log_card = Card("Status / Log")
@@ -382,6 +483,128 @@ class AudioPage(QWidget):
         log_card.body_layout.addWidget(self.log_text)
         root.addWidget(log_card)
         self._set_recording_controls_enabled()
+        self._update_session_ui()
+
+    def _audio_operation_active(self) -> bool:
+        return bool(
+            self.audio_manager.busy
+            or self.audio_manager.playback_busy
+            or self.audio_manager.recording_busy
+            or self.audio_manager.speaker_test_active
+        )
+
+    def _update_session_ui(self) -> None:
+        state = self.evidence_manager.state
+        labels = {
+            SessionState.NONE: ("idle", "Off"),
+            SessionState.ACTIVE: ("ok", "Active"),
+            SessionState.COMPLETED: ("ok", "Saved"),
+            SessionState.INTERRUPTED: ("warning", "Interrupted"),
+        }
+        chip_state, chip_text = labels.get(state, ("idle", "Off"))
+        self.session_status_chip.set_state(chip_state, chip_text)
+        has_session = state != SessionState.NONE
+        self.session_id_label.setText(self.evidence_manager.session_id or "-")
+        self.session_id_label.setVisible(has_session)
+        self.session_id_label.setToolTip(
+            str(self.evidence_manager.evidence_path)
+            if self.evidence_manager.evidence_path
+            else ""
+        )
+        active = self.evidence_manager.is_active
+        connected = self.jetson_service.is_connected
+        self.start_session_button.setEnabled(not active and connected and not self._audio_operation_active())
+        self.start_session_button.setVisible(not active)
+        self.end_session_button.setEnabled(active and not self._audio_operation_active())
+        self.end_session_button.setVisible(active)
+        has_evidence = self.evidence_manager.evidence_path is not None
+        self.copy_evidence_button.setEnabled(has_evidence)
+        self.copy_evidence_button.setVisible(has_evidence)
+        self.add_note_button.setEnabled(active)
+        self.add_note_button.setVisible(active)
+
+    def start_audio_session(self) -> None:
+        if self.evidence_manager.is_active:
+            return
+        if not self.jetson_service.is_connected:
+            self.append_log("ERROR: Connect Jetson before starting an Audio session.")
+            return
+        session_id = self.evidence_manager.start_session(
+            host=self.jetson_state.host,
+            jetson_info=self.jetson_state.jetson_info,
+            jetson_connected=True,
+            default_output=self._current_default_sink,
+            default_input=self._current_default_source,
+            default_output_display=self.default_output_label.text(),
+            default_input_display=self.default_input_label.text(),
+            speaker_volume=self.volume_slider.value() if self._has_default_sink else None,
+            speaker_muted=self.mute_status_label.text() == "Muted" if self._has_default_sink else None,
+        )
+        self._session_baseline_pending = True
+        self._session_volume_baseline_pending = True
+        self._update_session_ui()
+        self.append_log(f"Evidence session started: {session_id}")
+        self.append_log(f"Evidence path: {self.evidence_manager.local_display_path}")
+        if not self.audio_manager.discover_devices():
+            self._session_baseline_pending = False
+            self._session_volume_baseline_pending = False
+            self.evidence_manager.record_operation(
+                "DEVICE_SNAPSHOT", "FAILED", error="Unable to start baseline Audio discovery."
+            )
+            self.append_log("ERROR: Initial Audio device snapshot could not be started.")
+        self._update_session_ui()
+
+    def end_audio_session(self) -> None:
+        if not self.evidence_manager.is_active:
+            return
+        if self._audio_operation_active():
+            self.append_log("Stop the active Audio operation before ending the session.")
+            self._update_session_ui()
+            return
+        self.evidence_manager.update_state(
+            default_output=self._current_default_sink,
+            default_input=self._current_default_source,
+            speaker_volume=self.volume_slider.value() if self._has_default_sink else None,
+            speaker_muted=self.mute_status_label.text() == "Muted" if self._has_default_sink else None,
+        )
+        self.evidence_manager.end_session()
+        self.append_log("Audio session ended")
+        self._update_session_ui()
+
+    def add_session_note(self) -> None:
+        if not self.evidence_manager.is_active:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Evidence Note")
+        dialog.setModal(True)
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(12, 12, 12, 12)
+        note_edit = QTextEdit()
+        note_edit.setPlaceholderText("Manual observation or evidence note")
+        note_edit.setMinimumHeight(64)
+        note_edit.setMaximumHeight(100)
+        dialog_layout.addWidget(note_edit)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Save
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        note = note_edit.toPlainText().strip()
+        if not note:
+            return
+        self.evidence_manager.record_note(note)
+        self.append_log(f"Evidence note saved: {note}")
+
+    def copy_evidence_path(self) -> None:
+        path = self.evidence_manager.evidence_path
+        if path is None:
+            return
+        QApplication.clipboard().setText(str(path))
+        self.append_log(f"Copied local evidence path: {path}")
 
     @staticmethod
     def _set_card_accent(card: Card, accent: str) -> None:
@@ -425,6 +648,10 @@ class AudioPage(QWidget):
 
     def _on_jetson_state_changed(self, _state: JetsonState) -> None:
         connected = self.jetson_service.is_connected
+        if hasattr(self, "automated_page"):
+            self.automated_page.set_connected(connected)
+        if not connected and self.evidence_manager.is_active and not self.evidence_manager.is_interrupted:
+            self.evidence_manager.mark_interrupted("Jetson disconnected during Audio session.")
         self.connection_chip.set_state(
             "ok" if connected else "idle",
             "Connected" if connected else "Disconnected",
@@ -444,10 +671,12 @@ class AudioPage(QWidget):
                 self._set_playback_status("Idle")
             self.append_log("Jetson connected. Audio device discovery is ready.")
         self._last_connected = connected
+        self._update_session_ui()
 
     def _clear_devices(self, message: str) -> None:
         self._current_default_sink = None
         self._current_default_source = None
+        self._recording_native_signature = None
         self._routing_busy_kind = None
         self.set_default_output_button.setText("Set Default")
         self.set_default_input_button.setText("Set Default")
@@ -486,16 +715,47 @@ class AudioPage(QWidget):
             self._clear_devices("Unavailable — Jetson is not connected.")
             self.append_log("Audio discovery result ignored because Jetson disconnected.")
             return
+        if self.evidence_manager.is_active:
+            if self._session_baseline_pending:
+                self.evidence_manager.record_baseline(snapshot)
+                self._session_baseline_pending = False
+                self.append_log("Device snapshot saved")
+            else:
+                self.evidence_manager.record_operation(
+                    "DEVICE_REFRESH",
+                    "SUCCESS",
+                    details={
+                        "default_output": snapshot.default_sink,
+                        "default_input": snapshot.default_source,
+                        "output_count": len(snapshot.sinks),
+                        "input_count": len(snapshot.sources),
+                        "command_errors": snapshot.command_errors,
+                    },
+                )
+            self.evidence_manager.update_state(
+                default_output=snapshot.default_sink,
+                default_input=snapshot.default_source,
+                default_output_display=self._device_description(snapshot.sinks, snapshot.default_sink, "Not reported"),
+                default_input_display=self._device_description(snapshot.sources, snapshot.default_source, "Not reported"),
+            )
         self._current_default_sink = snapshot.default_sink
         self._current_default_source = snapshot.default_source
         self.default_output_label.setText(self._device_description(snapshot.sinks, snapshot.default_sink, "Not reported"))
-        self.default_output_label.setToolTip(snapshot.default_sink or "")
+        output_device = self._find_device(snapshot.sinks, snapshot.default_sink)
+        self.default_output_label.setToolTip(
+            self._device_tooltip(snapshot.default_sink, output_device)
+        )
         self.default_input_label.setText(self._device_description(snapshot.sources, snapshot.default_source, "Not reported"))
-        self.default_input_label.setToolTip(snapshot.default_source or "")
+        input_device = self._find_device(snapshot.sources, snapshot.default_source)
+        self.default_input_label.setToolTip(
+            self._device_tooltip(snapshot.default_source, input_device)
+        )
         self.recording_input_label.setText(
             self._device_description(snapshot.sources, snapshot.default_source, "No input audio device available.")
         )
-        self.recording_input_label.setToolTip(snapshot.default_source or "")
+        self.recording_input_label.setToolTip(
+            self._device_tooltip(snapshot.default_source, input_device)
+        )
         self._populate_combo(self.output_device_combo, snapshot.sinks, "No output devices detected.")
         self._populate_combo(self.input_device_combo, snapshot.sources, "No input devices detected.")
         self._select_combo_data(self.output_device_combo, snapshot.default_sink)
@@ -509,10 +769,14 @@ class AudioPage(QWidget):
         self._has_default_sink = bool(snapshot.default_sink)
         if snapshot.default_sink:
             self.volume_output_label.setText(readable_device_name(snapshot.default_sink))
-            self.volume_output_label.setToolTip(snapshot.default_sink)
+            self.volume_output_label.setToolTip(
+                self._device_tooltip(snapshot.default_sink, output_device)
+            )
             self._set_volume_controls_enabled(True)
         else:
             self._clear_volume("No output audio device available.")
+
+        self._apply_native_recording_configuration(input_device)
 
         for label, error in snapshot.command_errors.items():
             self.append_log(f"ERROR: {label}: {error}")
@@ -533,6 +797,9 @@ class AudioPage(QWidget):
         )
         self._set_routing_controls_enabled(False)
         self._set_playback_controls_enabled()
+        if self.evidence_manager.is_active:
+            self.evidence_manager.record_operation("DEVICE_REFRESH", "FAILED", error=error)
+            self._session_baseline_pending = False
         self.append_log(f"ERROR: {error}")
 
     @staticmethod
@@ -540,6 +807,49 @@ class AudioPage(QWidget):
         if not name:
             return fallback
         return resolve_device_description(devices, name) or readable_device_name(name)
+
+    @staticmethod
+    def _find_device(devices, name: str | None):
+        if not name:
+            return None
+        return next((device for device in devices if device.identifier == name), None)
+
+    @staticmethod
+    def _device_tooltip(name: str | None, device) -> str:
+        if not name:
+            return ""
+        if device and all(
+            value is not None
+            for value in (device.sample_format, device.channels, device.sample_rate_hz)
+        ):
+            return (
+                f"{name}\n"
+                f"Native format: {device.sample_format} / "
+                f"{device.channels} ch / {device.sample_rate_hz} Hz"
+            )
+        return name
+
+    def _apply_native_recording_configuration(self, device) -> None:
+        signature = None
+        if device:
+            signature = (
+                device.identifier,
+                device.sample_format,
+                device.channels,
+                device.sample_rate_hz,
+            )
+        if signature == self._recording_native_signature:
+            return
+        self._recording_native_signature = signature
+        if not device:
+            return
+        sample_rate, channels, sample_format = preferred_recording_configuration(device)
+        if sample_rate is not None:
+            self._select_combo_data(self.recording_sample_rate_combo, sample_rate)
+        if channels is not None:
+            self._select_combo_data(self.recording_channels_combo, channels)
+        if sample_format:
+            self._select_combo_data(self.recording_format_combo, sample_format.lower())
 
     @staticmethod
     def _select_combo_data(combo: QComboBox, value: str | None) -> None:
@@ -563,6 +873,7 @@ class AudioPage(QWidget):
     def _on_playback_path_changed(self, _path: str) -> None:
         self._file_validated = False
         self._validated_path = None
+        self._validated_input_path = None
         if not self.audio_manager.playback_active:
             self.current_file_label.setText("-")
             self._set_playback_status("Idle")
@@ -571,24 +882,205 @@ class AudioPage(QWidget):
     def validate_playback_file(self) -> None:
         if self.audio_manager.playback_active:
             return
+        self._validated_input_path = self.playback_file_edit.text().strip()
         self.append_log("Validating audio file...")
         self.audio_manager.validate_file(self.playback_file_edit.text())
 
     def play_audio(self) -> None:
         path = self.playback_file_edit.text().strip()
-        if not self._file_validated or path != self._validated_path:
+        if not self._file_validated or path != self._validated_input_path:
             self.append_log("ERROR: Validate this WAV file before playback.")
             return
         self.current_file_label.setText(path.rsplit("/", 1)[-1] or path)
         self.append_log("Starting speaker playback...")
-        self.append_log(f"File: {path}")
-        self.audio_manager.play(path)
+        self.append_log(f"Remote file: {self._validated_path or path}")
+        self._pending_playback_evidence = {
+            "operation": "PLAY_WAV",
+            "path": self._validated_path or path,
+            "output": self.volume_output_label.text(),
+            "volume": self._last_confirmed_volume,
+            "muted": self.mute_status_label.text() == "Muted",
+        }
+        self.evidence_manager.record_operation(
+            "PLAY_WAV", "STARTED", details=dict(self._pending_playback_evidence)
+        )
+        if not self.audio_manager.play(path):
+            self.evidence_manager.record_operation(
+                "PLAY_WAV", "FAILED", details=dict(self._pending_playback_evidence),
+                error="Unable to start speaker playback.",
+            )
+            self._pending_playback_evidence = {}
 
     def stop_audio(self) -> None:
         if not self.audio_manager.playback_active:
             return
         self.append_log("Stopping playback...")
+        self.evidence_manager.record_operation(
+            "STOP_WAV", "STARTED", details={"path": self._pending_playback_evidence.get("path")}
+        )
         self.audio_manager.stop_playback()
+
+    def play_recording(self) -> None:
+        recording = self.audio_manager.last_recorded_file
+        if recording is None or not recording.valid:
+            self._set_recorded_playback_controls_enabled()
+            return
+        filename = self._recording_filename(recording.path)
+        self.append_log("Playing recorded audio...")
+        self.append_log(f"Remote file: {recording.path}")
+        if self.mute_status_chip.text_label.text() == "Muted":
+            self.append_log("Speaker output is currently muted.")
+        self._pending_playback_evidence = {
+            "operation": "PLAY_RECORDING",
+            "path": recording.path,
+            "output": self.volume_output_label.text(),
+            "volume": self._last_confirmed_volume,
+            "muted": self.mute_status_label.text() == "Muted",
+            "file_size_bytes": recording.size_bytes,
+        }
+        self.evidence_manager.record_operation(
+            "PLAY_RECORDING", "STARTED", details=dict(self._pending_playback_evidence)
+        )
+        if not self.audio_manager.play_recorded_file():
+            self.evidence_manager.record_operation(
+                "PLAY_RECORDING", "FAILED", details=dict(self._pending_playback_evidence),
+                error="Unable to start recorded audio playback.",
+            )
+            self._pending_playback_evidence = {}
+
+    def stop_recording_playback(self) -> None:
+        if (
+            not self.audio_manager.playback_active
+            or self.audio_manager.playback_source != PlaybackSource.RECORDED_FILE
+        ):
+            return
+        self.append_log("Stopping recorded audio playback...")
+        self.evidence_manager.record_operation(
+            "STOP_RECORDED_PLAYBACK", "STARTED",
+            details={"path": self._pending_playback_evidence.get("path")},
+        )
+        self.audio_manager.stop_playback()
+
+    def start_speaker_channel_test(self) -> None:
+        if not self._has_default_sink:
+            self.append_log("No default output device available.")
+            self._set_speaker_test_controls_enabled()
+            return
+        if self.audio_manager.playback_active or self.audio_manager.recording_busy:
+            return
+        self.append_log("Starting Left / Right speaker test...")
+        self.append_log(f"Output device: {self.volume_output_label.text()}")
+        if self.mute_status_chip.text_label.text() == "Muted":
+            self.append_log("Speaker is currently muted.")
+        self._pending_speaker_test_evidence = True
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST",
+            "STARTED",
+            details={
+                "default_output": self._current_default_sink,
+                "output_display": self.volume_output_label.text(),
+                "volume": self._last_confirmed_volume,
+                "muted": self.mute_status_label.text() == "Muted",
+            },
+        )
+        if not self.audio_manager.start_speaker_channel_test():
+            self.evidence_manager.record_operation(
+                "SPEAKER_LEFT_RIGHT_TEST", "FAILED",
+                error="Unable to start the Left / Right speaker test.",
+            )
+            self._pending_speaker_test_evidence = False
+
+    def _on_speaker_test_prepared(self, preparation) -> None:
+        details = preparation.as_dict()
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST_PREPARED", "INFO", details=details
+        )
+        output = preparation.output_display_name or self.volume_output_label.text()
+        self.append_log("Left / Right speaker test")
+        self.append_log(f"Output: {output}")
+        if preparation.sample_format:
+            self.append_log(f"Native format: {preparation.sample_format}")
+        self.append_log(f"Channels: {preparation.channels or 2}")
+        self.append_log("Test type: Spoken WAV")
+        if preparation.prompt_directory:
+            self.append_log(f"Prompt directory: {preparation.prompt_directory}")
+        if preparation.native_sample_rate_hz is None:
+            self.append_log(
+                "WARNING: Output native sample rate could not be detected; "
+                "using speaker-test default rate."
+            )
+            self.append_log("Native rate: unknown")
+            self.append_log("Command rate: default")
+        else:
+            self.append_log(
+                f"Native rate: {preparation.native_sample_rate_hz} Hz"
+            )
+            self.append_log(
+                f"Command rate: {preparation.command_rate_hz} Hz"
+            )
+        if preparation.warning and preparation.native_sample_rate_hz is not None:
+            self.append_log(f"WARNING: {preparation.warning}")
+
+    def _set_speaker_test_controls_enabled(self) -> None:
+        if not hasattr(self, "speaker_test_button"):
+            return
+        active = self.audio_manager.speaker_test_active
+        self.speaker_test_button.setText("Testing L / R..." if active else "Test Left / Right")
+        self.speaker_test_button.setEnabled(
+            self.jetson_service.is_connected
+            and self._has_default_sink
+            and not active
+            and not self.audio_manager.playback_active
+            and not self.audio_manager.recording_busy
+            and not self.audio_manager.busy
+        )
+
+    def _on_speaker_test_state_changed(self, _state: str) -> None:
+        self._set_speaker_test_controls_enabled()
+        self._set_volume_controls_enabled(self._has_default_sink)
+        self._set_playback_controls_enabled()
+        self._set_recording_controls_enabled()
+        self._update_session_ui()
+
+    def _on_speaker_test_started(self) -> None:
+        preparation = self.audio_manager.speaker_test_preparation
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST", "SUCCESS",
+            details={
+                "process_state": "started",
+                **(preparation.as_dict() if preparation else {}),
+            },
+        )
+        self.append_log("Speaker Left / Right test started")
+        self._set_speaker_test_controls_enabled()
+
+    def _on_speaker_test_completed(self, _exit_code: int) -> None:
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST_COMPLETED", "SUCCESS", details={"exit_code": _exit_code}
+        )
+        self._pending_speaker_test_evidence = False
+        self.append_log("Speaker Left / Right test completed")
+        self._set_speaker_test_controls_enabled()
+
+    def _on_speaker_test_failed(self, error: str) -> None:
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST", "FAILED", error=error
+        )
+        self._pending_speaker_test_evidence = False
+        self.append_log(f"ERROR: {error}")
+        self._set_speaker_test_controls_enabled()
+
+    def _on_speaker_test_output(self, message: str) -> None:
+        self.append_log(message)
+
+    def _on_speaker_test_disconnected(self) -> None:
+        self.evidence_manager.record_operation(
+            "SPEAKER_LEFT_RIGHT_TEST", "FAILED",
+            error="Jetson disconnected during Left / Right speaker test.",
+        )
+        self._pending_speaker_test_evidence = False
+        self._set_speaker_test_controls_enabled()
+        self.append_log("Jetson disconnected during Left / Right speaker test.")
 
     def _set_playback_status(self, status: str) -> None:
         states = {
@@ -602,6 +1094,18 @@ class AudioPage(QWidget):
             "Ready": "ok",
         }
         self.playback_status_chip.set_state(states.get(status, "idle"), status)
+
+    def _set_recorded_playback_status(self, status: str) -> None:
+        states = {
+            "Playing": "ok",
+            "Completed": "ok",
+            "Failed": "error",
+            "Disconnected": "idle",
+            "Starting": "warning",
+            "Stopping": "warning",
+            "Idle": "idle",
+        }
+        self.recorded_playback_status_chip.set_state(states.get(status, "idle"), status)
 
     def _set_playback_controls_enabled(self) -> None:
         connected = self.jetson_service.is_connected
@@ -617,9 +1121,35 @@ class AudioPage(QWidget):
             and not recording_busy
             and not short_busy
             and self._file_validated
-            and self.playback_file_edit.text().strip() == self._validated_path
+            and self.playback_file_edit.text().strip() == self._validated_input_path
         )
-        self.stop_button.setEnabled(connected and active)
+        self.stop_button.setEnabled(
+            connected
+            and active
+            and self.audio_manager.playback_source != PlaybackSource.RECORDED_FILE
+        )
+        self._set_recorded_playback_controls_enabled()
+        self._set_speaker_test_controls_enabled()
+
+    def _set_recorded_playback_controls_enabled(self) -> None:
+        if not hasattr(self, "play_recording_button"):
+            return
+        recording = self.audio_manager.last_recorded_file
+        has_valid_recording = bool(recording and recording.valid)
+        playback_active = self.audio_manager.playback_active
+        self.play_recording_button.setEnabled(
+            self.jetson_service.is_connected
+            and self._has_default_sink
+            and has_valid_recording
+            and not playback_active
+            and not self.audio_manager.recording_busy
+            and not self.audio_manager.busy
+        )
+        self.stop_recording_playback_button.setEnabled(
+            self.jetson_service.is_connected
+            and playback_active
+            and self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE
+        )
 
     def _on_validation_started(self) -> None:
         self._set_playback_status("Validating")
@@ -631,9 +1161,13 @@ class AudioPage(QWidget):
             self.append_log("Audio file validation result ignored because Jetson disconnected.")
             return
         self._validated_path = audio_file.path
-        self._file_validated = self.playback_file_edit.text().strip() == audio_file.path
+        self._file_validated = (
+            bool(self._validated_input_path)
+            and self.playback_file_edit.text().strip() == self._validated_input_path
+        )
         if not self._file_validated:
             self._validated_path = None
+            self._validated_input_path = None
             self._set_playback_status("Idle")
             self._set_playback_controls_enabled()
             self.append_log("Audio file changed while validation was running; validate again.")
@@ -647,52 +1181,130 @@ class AudioPage(QWidget):
     def _on_validation_failed(self, error: str) -> None:
         self._file_validated = False
         self._validated_path = None
+        self._validated_input_path = None
         self._set_playback_status("Failed" if self.jetson_service.is_connected else "Disconnected")
         self._set_playback_controls_enabled()
         self.append_log(f"ERROR: {error}")
 
     def _on_playback_state_changed(self, state: str) -> None:
-        self._set_playback_status(state)
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status(state)
+        else:
+            self._set_playback_status(state)
         self._set_playback_controls_enabled()
+        self._update_session_ui()
+
+    def _current_playback_evidence_operation(self) -> str:
+        pending = self._pending_playback_evidence.get("operation")
+        if pending in {"PLAY_WAV", "PLAY_RECORDING"}:
+            return str(pending)
+        return (
+            "PLAY_RECORDING"
+            if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE
+            else "PLAY_WAV"
+        )
 
     def _on_playback_started(self, path: str) -> None:
-        self.current_file_label.setText(path.rsplit("/", 1)[-1] or path)
-        self.append_log("Playback started")
+        operation = self._current_playback_evidence_operation()
+        details = dict(self._pending_playback_evidence)
+        details["path"] = path
+        details["process_state"] = "started"
+        self.evidence_manager.record_operation(operation, "SUCCESS", details=details)
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status("Playing")
+            self.append_log("Recorded audio playback started")
+        else:
+            self.current_file_label.setText(path.rsplit("/", 1)[-1] or path)
+            self.append_log("Playback started")
         self._set_playback_controls_enabled()
 
     def _on_playback_finished(self, _path: str, _exit_code: int) -> None:
-        self.current_file_label.setText("-")
-        self.append_log("Playback completed")
+        operation = (
+            "PLAY_RECORDING_COMPLETED"
+            if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE
+            else "PLAY_WAV_COMPLETED"
+        )
+        self.evidence_manager.record_operation(
+            operation, "SUCCESS", details={"path": _path, "exit_code": _exit_code}
+        )
+        self._pending_playback_evidence = {}
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status("Completed")
+            self.append_log("Recorded audio playback completed")
+        else:
+            self.current_file_label.setText("-")
+            self.append_log("Playback completed")
         self._set_playback_controls_enabled()
 
     def _on_playback_stopped(self) -> None:
-        self.current_file_label.setText("-")
-        self.append_log("Playback stopped")
+        operation = (
+            "STOP_RECORDED_PLAYBACK"
+            if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE
+            else "STOP_WAV"
+        )
+        self.evidence_manager.record_operation(operation, "SUCCESS", details={"process_state": "stopped"})
+        self._pending_playback_evidence = {}
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status("Idle")
+            self.append_log("Recorded audio playback stopped")
+        else:
+            self.current_file_label.setText("-")
+            self.append_log("Playback stopped")
         self._set_playback_controls_enabled()
 
     def _on_playback_failed(self, error: str) -> None:
-        self.current_file_label.setText("-")
-        self._set_playback_status("Failed" if self.jetson_service.is_connected else "Disconnected")
+        operation = self._current_playback_evidence_operation()
+        self.evidence_manager.record_operation(
+            operation, "FAILED", details=dict(self._pending_playback_evidence), error=error
+        )
+        self._pending_playback_evidence = {}
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status(
+                "Failed" if self.jetson_service.is_connected else "Disconnected"
+            )
+        else:
+            self.current_file_label.setText("-")
+            self._set_playback_status("Failed" if self.jetson_service.is_connected else "Disconnected")
         self._set_playback_controls_enabled()
         self.append_log(f"ERROR: {error}")
 
     def _on_playback_output(self, message: str) -> None:
         self.append_log(message)
 
+    def _on_hardware_mixer_status(self, result) -> None:
+        for message in getattr(result, "messages", ()):
+            self.append_log(message)
+
     def _on_playback_disconnected(self) -> None:
-        self.current_file_label.setText("-")
-        self._file_validated = False
-        self._validated_path = None
-        self._set_playback_status("Disconnected")
+        operation = self._current_playback_evidence_operation()
+        self.evidence_manager.record_operation(
+            operation, "FAILED", details=dict(self._pending_playback_evidence),
+            error="Jetson disconnected during audio playback.",
+        )
+        self._pending_playback_evidence = {}
+        if self.audio_manager.playback_source == PlaybackSource.RECORDED_FILE:
+            self._set_recorded_playback_status("Disconnected")
+            self.append_log("Jetson disconnected during recorded audio playback.")
+        else:
+            self.current_file_label.setText("-")
+            self._file_validated = False
+            self._validated_path = None
+            self._validated_input_path = None
+            self._set_playback_status("Disconnected")
+            self.append_log("Jetson disconnected during audio playback.")
         self._set_playback_controls_enabled()
-        self.append_log("Jetson disconnected during audio playback.")
 
     def _reset_playback_for_disconnect(self) -> None:
         self._file_validated = False
         self._validated_path = None
+        self._validated_input_path = None
         self.current_file_label.setText("-")
         self._set_playback_status("Disconnected")
         self._set_playback_controls_enabled()
+
+    @staticmethod
+    def _recording_filename(path: str) -> str:
+        return path.rsplit("/", 1)[-1] or path
 
     def generate_recording_path(self) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -720,8 +1332,6 @@ class AudioPage(QWidget):
         except (TypeError, ValueError):
             self._on_recording_failed("Select a valid microphone recording configuration.")
             return
-        self.recorded_file_label.setText("-")
-        self.recorded_file_size_label.setText("-")
         self.recording_elapsed_label.setText("00:00")
         self.append_log("Preparing microphone recording...")
         self.append_log(f"Input: {self.recording_input_label.text()}")
@@ -729,12 +1339,32 @@ class AudioPage(QWidget):
         self.append_log(f"Channels: {config.channels}")
         self.append_log(f"Format: {config.sample_format}")
         self.append_log(f"Output: {config.output_path}")
-        self.audio_manager.start_recording(config)
+        self._pending_recording_evidence = {
+            "input_source": config.source_name,
+            "input_display": self.recording_input_label.text(),
+            "sample_rate": config.sample_rate,
+            "channels": config.channels,
+            "format": config.sample_format,
+            "duration_seconds": config.duration_seconds,
+            "requested_output_path": config.output_path,
+        }
+        self.evidence_manager.record_operation(
+            "START_RECORDING", "STARTED", details=dict(self._pending_recording_evidence)
+        )
+        if not self.audio_manager.start_recording(config):
+            self.evidence_manager.record_operation(
+                "START_RECORDING", "FAILED", details=dict(self._pending_recording_evidence),
+                error="Unable to start microphone recording.",
+            )
+            self._pending_recording_evidence = {}
+        self._set_recording_controls_enabled()
+        self._set_playback_controls_enabled()
 
     def stop_recording(self) -> None:
         if not self.audio_manager.recording_active:
             return
         self.append_log("Stopping microphone recording...")
+        self.evidence_manager.record_operation("STOP_RECORDING", "STARTED")
         self.audio_manager.stop_recording()
 
     def _set_recording_status(self, status: str) -> None:
@@ -781,6 +1411,8 @@ class AudioPage(QWidget):
             and recording_active
             and self.audio_manager.recording_state == RecordingState.RECORDING
         )
+        self._set_recorded_playback_controls_enabled()
+        self._set_speaker_test_controls_enabled()
 
     def _on_recording_timer_tick(self) -> None:
         self._recording_elapsed_seconds += 1
@@ -792,6 +1424,7 @@ class AudioPage(QWidget):
         self._set_recording_controls_enabled()
         self._set_routing_controls_enabled(self.jetson_service.is_connected)
         self._set_playback_controls_enabled()
+        self._update_session_ui()
 
     def _on_recording_started(self, path: str) -> None:
         self._recording_elapsed_seconds = 0
@@ -799,6 +1432,9 @@ class AudioPage(QWidget):
         self._recording_elapsed_timer.start()
         if not self.recording_manual_check.isChecked():
             self._recording_duration_timer.start(self.recording_duration_spin.value() * 1000)
+        details = dict(self._pending_recording_evidence)
+        details["remote_path"] = path
+        self.evidence_manager.record_operation("START_RECORDING", "SUCCESS", details=details)
         self.append_log("Recording started")
 
     def _stop_recording_timers(self) -> None:
@@ -807,15 +1443,34 @@ class AudioPage(QWidget):
 
     def _on_recording_completed(self, result) -> None:
         self._stop_recording_timers()
-        self.recorded_file_label.setText(result.path)
-        self.recorded_file_size_label.setText(f"{result.size_bytes} bytes")
-        self.append_log("Recording stopped")
-        self.append_log("Verifying output WAV...")
-        self.append_log("Recorded file created successfully")
-        self.append_log(f"File size: {result.size_bytes} bytes")
+        filename = self._recording_filename(result.path)
+        self.recorded_file_label.setText(filename)
+        self.recorded_file_label.setToolTip(result.path)
+        self.recorded_file_size_label.setText(
+            f"{result.size_bytes:,} bytes ({result.size_bytes / 1000:.0f} KB)"
+        )
+        self.append_log("Recording completed")
+        self.append_log("Recorded WAV verified")
+        self.append_log(f"Display file: {filename}")
+        self.append_log(f"Remote path: {result.path}")
+        self.append_log(f"Size: {result.size_bytes} bytes")
+        recording_details = dict(self._pending_recording_evidence)
+        recording_details.update(
+            {"remote_path": result.path, "size_bytes": result.size_bytes, "verified": result.valid}
+        )
+        self.evidence_manager.record_operation(
+            "RECORDING_COMPLETED", "SUCCESS", details=recording_details
+        )
+        self.evidence_manager.record_operation(
+            "STOP_RECORDING", "SUCCESS", details={"remote_path": result.path, "size_bytes": result.size_bytes}
+        )
+        self._pending_recording_evidence = {}
         self._set_recording_controls_enabled()
 
     def _on_recording_failed(self, error: str) -> None:
+        details = dict(self._pending_recording_evidence)
+        self.evidence_manager.record_operation("START_RECORDING", "FAILED", details=details, error=error)
+        self._pending_recording_evidence = {}
         self._stop_recording_timers()
         self._set_recording_status(
             "Disconnected" if not self.jetson_service.is_connected else "Failed"
@@ -829,6 +1484,11 @@ class AudioPage(QWidget):
         self.append_log(message)
 
     def _on_recording_disconnected(self) -> None:
+        self.evidence_manager.record_operation(
+            "START_RECORDING", "FAILED", details=dict(self._pending_recording_evidence),
+            error="Jetson disconnected during microphone recording.",
+        )
+        self._pending_recording_evidence = {}
         self._stop_recording_timers()
         self._set_recording_status("Disconnected")
         self._set_recording_controls_enabled()
@@ -846,7 +1506,16 @@ class AudioPage(QWidget):
         description = self.output_device_combo.currentText()
         self.append_log("Setting default output device...")
         self.append_log(f"Requested sink: {description}")
-        self.audio_manager.set_default_sink(str(sink_name))
+        self._pending_routing_evidence["sink"] = {
+            "previous": self._current_default_sink,
+            "requested": str(sink_name),
+            "requested_display": description,
+        }
+        if not self.audio_manager.set_default_sink(str(sink_name)):
+            self.evidence_manager.record_operation(
+                "SET_DEFAULT_OUTPUT", "FAILED", details=self._pending_routing_evidence.pop("sink", {}),
+                error="Unable to start default output routing operation.",
+            )
 
     def set_default_input(self) -> None:
         source_name = self.input_device_combo.currentData()
@@ -858,7 +1527,16 @@ class AudioPage(QWidget):
         description = self.input_device_combo.currentText()
         self.append_log("Setting default input device...")
         self.append_log(f"Requested source: {description}")
-        self.audio_manager.set_default_source(str(source_name))
+        self._pending_routing_evidence["source"] = {
+            "previous": self._current_default_source,
+            "requested": str(source_name),
+            "requested_display": description,
+        }
+        if not self.audio_manager.set_default_source(str(source_name)):
+            self.evidence_manager.record_operation(
+                "SET_DEFAULT_INPUT", "FAILED", details=self._pending_routing_evidence.pop("source", {}),
+                error="Unable to start default input routing operation.",
+            )
 
     def _on_routing_operation_started(self, kind: str) -> None:
         self._routing_busy_kind = kind
@@ -869,31 +1547,61 @@ class AudioPage(QWidget):
         self._set_routing_controls_enabled(False)
         self._set_volume_controls_enabled(False)
         self._set_playback_controls_enabled()
+        self._update_session_ui()
 
     def _on_routing_succeeded(self, result) -> None:
+        operation = "SET_DEFAULT_OUTPUT" if result.kind == "sink" else "SET_DEFAULT_INPUT"
+        details = dict(self._pending_routing_evidence.pop(result.kind, {}))
+        details.update(
+            {
+                "confirmed_default_output": result.default_sink,
+                "confirmed_default_input": result.default_source,
+            }
+        )
         self._routing_busy_kind = None
         self.set_default_output_button.setText("Set Default")
         self.set_default_input_button.setText("Set Default")
         if not self.jetson_service.is_connected:
+            self.evidence_manager.record_operation(
+                operation, "FAILED", details=details,
+                error="Routing result ignored because Jetson disconnected.",
+            )
             self.append_log("ERROR: Routing result ignored because Jetson disconnected.")
             return
         label = "output" if result.kind == "sink" else "input"
+        self.evidence_manager.record_operation(operation, "SUCCESS", details=details)
+        self.evidence_manager.update_state(
+            default_output=result.default_sink,
+            default_input=result.default_source,
+            default_output_display=self.output_device_combo.currentText() if result.kind == "sink" else self.default_output_label.text(),
+            default_input_display=self.input_device_combo.currentText() if result.kind == "source" else self.default_input_label.text(),
+        )
         self.append_log(f"Default {label} updated successfully")
         self.append_log("Refreshing device state...")
         self.refresh_devices()
 
     def _on_routing_failed(self, error: str) -> None:
+        kind = self._routing_busy_kind or ""
         self._routing_busy_kind = None
         self.set_default_output_button.setText("Set Default")
         self.set_default_input_button.setText("Set Default")
         self._set_routing_controls_enabled(self.jetson_service.is_connected)
         self._set_volume_controls_enabled(self._has_default_sink)
         self._set_playback_controls_enabled()
+        if kind in {"sink", "source"}:
+            operation = "SET_DEFAULT_OUTPUT" if kind == "sink" else "SET_DEFAULT_INPUT"
+            self.evidence_manager.record_operation(
+                operation,
+                "FAILED",
+                details=self._pending_routing_evidence.pop(kind, {}),
+                error=error,
+            )
         self.append_log(f"ERROR: {error}")
 
     def _clear_volume(self, message: str) -> None:
         self._has_default_sink = False
         self._volume_busy = False
+        self._last_confirmed_volume = None
         self.volume_output_label.setText(message)
         self.volume_output_label.setToolTip("")
         self.volume_slider.setEnabled(False)
@@ -902,9 +1610,15 @@ class AudioPage(QWidget):
         self.refresh_volume_button.setEnabled(False)
         self.mute_status_chip.set_state("idle", "Unavailable")
         self.high_volume_warning.setVisible(False)
+        self._set_speaker_test_controls_enabled()
 
     def _set_volume_controls_enabled(self, enabled: bool) -> None:
-        enabled = bool(enabled and self.jetson_service.is_connected and not self._volume_busy)
+        enabled = bool(
+            enabled
+            and self.jetson_service.is_connected
+            and not self._volume_busy
+            and not self.audio_manager.speaker_test_active
+        )
         self.volume_slider.setEnabled(enabled)
         self.mute_button.setEnabled(enabled)
         self.unmute_button.setEnabled(enabled)
@@ -914,6 +1628,8 @@ class AudioPage(QWidget):
             and not self.audio_manager.busy
             and not self.audio_manager.recording_busy
         )
+        self._set_recorded_playback_controls_enabled()
+        self._set_speaker_test_controls_enabled()
 
     def _on_slider_value_changed(self, value: int) -> None:
         self.volume_percent_label.setText(f"{value} %")
@@ -924,36 +1640,59 @@ class AudioPage(QWidget):
             return
         percent = self.volume_slider.value()
         self.append_log(f"Setting speaker volume to {percent}%")
-        self.audio_manager.set_volume(percent)
+        self._pending_volume_evidence = {
+            "previous": self._last_confirmed_volume,
+            "requested": percent,
+        }
+        if not self.audio_manager.set_volume(percent):
+            self.evidence_manager.record_operation(
+                "SET_VOLUME", "FAILED", details=self._pending_volume_evidence or {},
+                error="Unable to start volume operation.",
+            )
+            self._pending_volume_evidence = None
 
     def refresh_volume(self) -> None:
         if not self._has_default_sink or not self.jetson_service.is_connected or self._volume_busy:
             return
         self.append_log("Reading speaker volume...")
-        self.audio_manager.get_volume_state()
+        self._pending_volume_refresh = True
+        if not self.audio_manager.get_volume_state():
+            if self._pending_volume_refresh:
+                self._pending_volume_refresh = False
+                self.evidence_manager.record_operation(
+                    "REFRESH_VOLUME", "FAILED", error="Unable to start volume refresh operation."
+                )
 
     def mute_speaker(self) -> None:
         if not self._has_default_sink or self._volume_busy:
             return
         self.append_log("Muting speaker...")
-        self.audio_manager.mute()
+        self._pending_mute_evidence = "MUTE"
+        if not self.audio_manager.mute():
+            self.evidence_manager.record_operation("MUTE", "FAILED", error="Unable to start mute operation.")
+            self._pending_mute_evidence = None
 
     def unmute_speaker(self) -> None:
         if not self._has_default_sink or self._volume_busy:
             return
         self.append_log("Unmuting speaker...")
-        self.audio_manager.unmute()
+        self._pending_mute_evidence = "UNMUTE"
+        if not self.audio_manager.unmute():
+            self.evidence_manager.record_operation("UNMUTE", "FAILED", error="Unable to start unmute operation.")
+            self._pending_mute_evidence = None
 
     def _on_volume_operation_started(self, _kind: str) -> None:
         self._volume_busy = True
         self._set_volume_controls_enabled(False)
         self._set_playback_controls_enabled()
+        self._update_session_ui()
 
     def _on_volume_state_ready(self, state) -> None:
         if not self.jetson_service.is_connected:
             self._clear_volume("Unavailable — Jetson is not connected.")
             return
         self._volume_busy = False
+        self._last_confirmed_volume = state.volume_percent
         self.volume_slider.blockSignals(True)
         self.volume_slider.setValue(state.volume_percent)
         self.volume_slider.blockSignals(False)
@@ -961,6 +1700,22 @@ class AudioPage(QWidget):
         self._set_mute_status(state.muted)
         self._set_volume_controls_enabled(True)
         self._set_playback_controls_enabled()
+        self.evidence_manager.update_state(
+            speaker_volume=state.volume_percent,
+            speaker_muted=state.muted,
+        )
+        if self.evidence_manager.is_active:
+            self.evidence_manager.record_operation(
+                "REFRESH_VOLUME",
+                "SUCCESS",
+                details={
+                    "confirmed_volume": state.volume_percent,
+                    "muted": state.muted,
+                    "automatic": self._session_volume_baseline_pending,
+                },
+            )
+            self._session_volume_baseline_pending = False
+        self._pending_volume_refresh = False
         self.append_log(f"Current volume: {state.volume_percent}%")
         self.append_log(f"Speaker state: {'Muted' if state.muted else 'Unmuted'}")
 
@@ -969,12 +1724,20 @@ class AudioPage(QWidget):
             self._clear_volume("Unavailable — Jetson is not connected.")
             return
         self._volume_busy = False
+        self._last_confirmed_volume = percent
         self.volume_slider.blockSignals(True)
         self.volume_slider.setValue(percent)
         self.volume_slider.blockSignals(False)
         self._on_slider_value_changed(percent)
         self._set_volume_controls_enabled(True)
         self._set_playback_controls_enabled()
+        volume_details = dict(self._pending_volume_evidence or {})
+        volume_details["confirmed"] = percent
+        if percent >= 80:
+            volume_details["warning"] = "High volume – speaker distortion may occur."
+        self.evidence_manager.update_state(speaker_volume=percent)
+        self.evidence_manager.record_operation("SET_VOLUME", "SUCCESS", details=volume_details)
+        self._pending_volume_evidence = None
         self.append_log(f"Volume updated successfully: {percent}%")
 
     def _on_mute_changed(self, muted: bool) -> None:
@@ -985,18 +1748,36 @@ class AudioPage(QWidget):
         self._set_mute_status(muted)
         self._set_volume_controls_enabled(True)
         self._set_playback_controls_enabled()
+        operation = self._pending_mute_evidence or ("MUTE" if muted else "UNMUTE")
+        self.evidence_manager.update_state(speaker_muted=muted)
+        self.evidence_manager.record_operation(
+            operation, "SUCCESS", details={"muted": muted}
+        )
+        self._pending_mute_evidence = None
         self.append_log(f"Speaker {'muted' if muted else 'unmuted'}")
 
     def _set_mute_status(self, muted: bool) -> None:
         self.mute_status_chip.set_state("warning" if muted else "ok", "Muted" if muted else "Unmuted")
 
     def _on_volume_failed(self, error: str) -> None:
+        pending_volume = self._pending_volume_evidence
+        pending_mute = self._pending_mute_evidence
+        pending_refresh = self._pending_volume_refresh
+        self._pending_volume_evidence = None
+        self._pending_mute_evidence = None
+        self._pending_volume_refresh = False
         self._volume_busy = False
         if not self.jetson_service.is_connected:
             self._clear_volume("Unavailable — Jetson is not connected.")
         else:
             self._set_volume_controls_enabled(self._has_default_sink)
         self._set_playback_controls_enabled()
+        if pending_volume is not None:
+            self.evidence_manager.record_operation("SET_VOLUME", "FAILED", details=pending_volume, error=error)
+        elif pending_mute is not None:
+            self.evidence_manager.record_operation(pending_mute, "FAILED", error=error)
+        elif pending_refresh:
+            self.evidence_manager.record_operation("REFRESH_VOLUME", "FAILED", error=error)
         self.append_log(f"ERROR: {error}")
 
     @staticmethod
@@ -1017,9 +1798,20 @@ class AudioPage(QWidget):
     def append_log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.appendPlainText(f"[{timestamp}] {message}")
+        self.evidence_manager.log_message(message)
+        self._update_session_ui()
 
     def shutdown(self) -> None:
         """Stop this page's managed audio processes during application exit."""
+        had_active_operation = self._audio_operation_active()
         self._stop_recording_timers()
         self.audio_manager.shutdown_recording()
         self.audio_manager.shutdown_playback()
+        self.audio_manager.shutdown_speaker_channel_test()
+        if self.evidence_manager.is_active:
+            if had_active_operation and not self.evidence_manager.is_interrupted:
+                self.evidence_manager.mark_interrupted(
+                    "Application closed while an Audio operation was active."
+                )
+            self.evidence_manager.end_session(application_closed=True)
+        self._update_session_ui()
