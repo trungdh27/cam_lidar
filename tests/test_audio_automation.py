@@ -79,11 +79,14 @@ class AudioAutomationTests(unittest.TestCase):
         self.assertTrue(summary["default_sink_ok"])
 
     def test_precheck_passes_with_dynamic_card_and_mixer(self):
-        result = asyncio.run(run_audio_precheck(_SSH(precheck_outputs())))
+        ssh = _SSH(precheck_outputs())
+        result = asyncio.run(run_audio_precheck(ssh))
         self.assertTrue(result.success)
         self.assertEqual(result.data["alsa"]["card_index"], 2)
         self.assertEqual(result.data["mixer"]["final_level_percent"], 70)
         self.assertEqual(result.data["mixer"]["pcm0_level_percent"], 50)
+        self.assertIn("amixer -c 2 sget 'PCM',1", ssh.commands)
+        self.assertNotIn("amixer -c 1 sget 'PCM',1", ssh.commands)
 
     def test_precheck_fails_cleanly_when_alsa_is_missing(self):
         result = asyncio.run(run_audio_precheck(_SSH(precheck_outputs(cards=" 0 [PCH]: HDA-Intel - HDA Intel PCH\n"))))
@@ -112,10 +115,43 @@ class AudioAutomationTests(unittest.TestCase):
     def test_wav_peak_rms_and_clipping_analysis(self):
         payload = self._wav_bytes([1000, 2000] * 10)
         data = analyze_wav_bytes(payload)
-        self.assertAlmostEqual(data["channel_1"]["peak"], 1000 / 32767, places=6)
-        self.assertAlmostEqual(data["channel_2"]["peak"], 2000 / 32767, places=6)
+        self.assertAlmostEqual(data["channel_1"]["peak"], 1000 / 32768, places=6)
+        self.assertAlmostEqual(data["channel_2"]["peak"], 2000 / 32768, places=6)
         self.assertGreater(data["channel_2"]["rms"], data["channel_1"]["rms"])
-        self.assertFalse(data["clipping"])
+        self.assertFalse(data["clipping_detected"])
+
+    def test_stereo_metrics_include_dbfs_zero_signal_and_delta(self):
+        payload = self._wav_bytes([3277, 0] * 5000)
+        data = analyze_wav_bytes(payload)
+        left, right = data["channels_data"]
+        self.assertAlmostEqual(left["peak"], 3277 / 32768, places=6)
+        self.assertTrue(right["zero_signal"])
+        self.assertIsNone(right["rms_dbfs"])
+        self.assertIsNone(data["channel_delta_db"])
+        self.assertFalse(data["clipping_detected"])
+
+    def test_clipping_is_counted_per_channel(self):
+        payload = self._wav_bytes([32767, -32768, 0, 0])
+        data = analyze_wav_bytes(payload)
+        self.assertEqual(data["channels_data"][0]["clipping_count"], 1)
+        self.assertEqual(data["channels_data"][1]["clipping_count"], 1)
+        self.assertTrue(data["clipping_detected"])
+
+    def test_corrupt_wav_returns_structured_failure(self):
+        with tempfile.NamedTemporaryFile(suffix=".wav") as file:
+            file.write(b"not a wav")
+            file.flush()
+            result = analyze_wav(file.name)
+        self.assertFalse(result.success)
+        self.assertEqual(result.action, "analyze_wav")
+
+    def test_analysis_json_safe_for_zero_signal(self):
+        import json
+
+        data = analyze_wav_bytes(self._wav_bytes([0, 0] * 32))
+        encoded = json.dumps(data, allow_nan=False)
+        self.assertNotIn("Infinity", encoded)
+        self.assertNotIn("NaN", encoded)
 
     def test_wav_analysis_result_and_logger_are_structured(self):
         with tempfile.NamedTemporaryFile(suffix=".wav") as file:
