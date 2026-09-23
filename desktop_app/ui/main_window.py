@@ -23,7 +23,9 @@ from desktop_app.state.device_registry import DeviceRegistry
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.state.lidar_runtime_state import LidarRuntimeState
 from desktop_app.ui.camera_page import CameraPage
+from desktop_app.ui.audio_page import AudioPage
 from desktop_app.ui.ai_page import AiPage
+from desktop_app.ui.bluetooth_page import BluetoothPage
 from desktop_app.ui.dashboard_page import DashboardPage
 from desktop_app.ui.lidar_page import LidarPage
 from desktop_app.ui.system_stress_page import SystemStressPage
@@ -33,6 +35,7 @@ from devices.livox.testing import (
     LidarTestExecutionService,
     build_lidar_test_registry,
 )
+from core.bluetooth import BluetoothManager, BluetoothTestRunner
 
 
 class PlaceholderPage(QWidget):
@@ -58,8 +61,10 @@ class MainWindow(QMainWindow):
         ("◉", "Dashboard"),
         ("▦", "Devices"),
         ("▣", "Camera"),
+        ("♫", "Audio"),
         ("✦", "AI"),
         ("◌", "LiDAR"),
+        ("◉", "Bluetooth"),
         ("⌘", "IMU"),
         ("▤", "CAN"),
         ("⌘", "EtherCAT"),
@@ -82,6 +87,12 @@ class MainWindow(QMainWindow):
         self.jetson_service = JetsonConnectionService(
             self.jetson_state,
             self,
+        )
+        # Bluetooth receives this existing shared Jetson service; it owns no
+        # separate SSH transport.
+        self.bluetooth_manager = BluetoothManager(self.jetson_service)
+        self.bluetooth_test_runner = BluetoothTestRunner(
+            self.bluetooth_manager, parent=self
         )
         self.camera_inventory_service = CameraInventoryService(
             self.jetson_service, parent=self
@@ -154,18 +165,18 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
 
         placeholders = {
-            0: ("Dashboard", "Hardware test overview."),
-            1: ("Devices", "Connected device inventory."),
-            2: ("Camera", "Camera module."),
-            5: ("IMU", "IMU module."),
-            6: ("CAN", "CAN module."),
-            7: ("EtherCAT", "EtherCAT module."),
-            8: ("Test Runner", "Cross-device test runner."),
-            9: ("History", "Test session history."),
-            10: ("Evidence", "Evidence storage."),
-            11: ("Reports", "Test reports."),
-            12: ("Settings", "Application settings."),
-        }
+    0: ("Dashboard", "Hardware test overview."),
+    1: ("Devices", "Connected device inventory."),
+    2: ("Camera", "Camera module."),
+    7: ("IMU", "IMU module."),
+    8: ("CAN", "CAN module."),
+    9: ("EtherCAT", "EtherCAT module."),
+    10: ("Test Runner", "Cross-device test runner."),
+    11: ("History", "Test session history."),
+    12: ("Evidence", "Evidence storage."),
+    13: ("Reports", "Test reports."),
+    14: ("Settings", "Application settings."),
+}
 
         for index in range(len(self.NAV_ITEMS)):
             if index == 0:
@@ -190,9 +201,15 @@ class MainWindow(QMainWindow):
                 self.camera_page.shutdown_ready.connect(self._finish_close)
                 self.pages.addWidget(self.camera_page)
             elif index == 3:
+                self.audio_page = AudioPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                )
+                self.pages.addWidget(self.audio_page)
+            elif index == 4:
                 self.ai_page = AiPage(self.jetson_state, self.jetson_service)
                 self.pages.addWidget(self.ai_page)
-            elif index == 4:
+            elif index == 5:
                 self.lidar_page = LidarPage(
                     self.jetson_state,
                     self.jetson_service,
@@ -205,6 +222,14 @@ class MainWindow(QMainWindow):
                     network_profile=self.livox_network_profile,
                 )
                 self.pages.addWidget(self.lidar_page)
+            elif index == 6:
+                self.bluetooth_page = BluetoothPage(
+                    self.jetson_state,
+                    self.jetson_service,
+                    self.bluetooth_manager,
+                    self.bluetooth_test_runner,
+                )
+                self.pages.addWidget(self.bluetooth_page)
             elif index == len(self.NAV_ITEMS) - 1:
                 self.system_stress_page = SystemStressPage(
                     remote_service=self.jetson_service,
@@ -250,6 +275,8 @@ class MainWindow(QMainWindow):
             self.lidar_page.shutdown()
         if hasattr(self, "system_stress_page"):
             self.system_stress_page.shutdown()
+        if hasattr(self, "audio_page"):
+            self.audio_page.shutdown()
         if hasattr(self, "ai_page") and self.ai_page._worker and self.ai_page._worker.isRunning():
             event.ignore()
             self.ai_page.cancel()

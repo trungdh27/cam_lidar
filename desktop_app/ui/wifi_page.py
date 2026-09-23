@@ -1122,14 +1122,22 @@ class WifiEnvironmentPage(QWidget):
     def _case_status(self, case: WifiTestCase) -> str:
         """Status projected onto the normal TC list.
 
-        AUTO uses Current Session only. Historical attempts remain available
-        through History/Evidence and must not repopulate this list.
+        AUTO uses Current Session execution results only. When a case has no
+        result in the current session, show its live readiness instead of
+        falling back to historical attempts.
         """
         if self.suite == "AUTO":
-            return self.runtime.current_session_status(
+            status = self.runtime.current_session_status(
                 self.environment,
                 case.test_id,
             )
+            if status == "NOT RUN":
+                return readiness_status(
+                    case,
+                    self.runtime.effective_auto_setup(),
+                )
+            return status
+
         return self.runtime.latest_status(
             self.environment,
             case.test_id,
