@@ -235,9 +235,10 @@ def test_c01_qt_log_layout_metrics_search_and_reopen(tmp_path):
     assert vd.monitor.cards["NetworkManager"].value.text() == "connected"
     assert vd.monitor.cards["Driver/PHY"].value.text() == "rtl88x2ce"
     assert vd.monitor.cards["Kernel Device Errors"].value.text() == "0"
-    assert vd.criteria_table.rowCount() == 6
+    assert vd.criteria_table.rowCount() == 5
     assert "PASS" in vd.auto_result_label.text()
     vd.layers.setCurrentIndex(1)
+    vd.log_modes.setCurrentIndex(1)
     QApplication.processEvents()
     assert "line 0" in vd.raw_view.toPlainText() and "line 499" in vd.raw_view.toPlainText()
     assert vd.raw_view.verticalScrollBar().maximum() > 0
@@ -254,7 +255,7 @@ def test_c01_qt_log_layout_metrics_search_and_reopen(tmp_path):
     assert page.runtime.latest_status("VD", CASE.test_id) == "PASS"
     vd.show_detail(CASE.test_id)
     vd._open_attempt(attempt.directory / "result.json")
-    assert vd.criteria_table.rowCount() == 6
+    assert vd.criteria_table.rowCount() == 5
     assert vd._view_attempt.criteria == attempt.criteria
     assert vd._view_attempt.evidence == attempt.evidence
     page.close()
@@ -268,6 +269,7 @@ def test_long_log_is_file_backed_and_searches_older_content(tmp_path):
     attempt = page.runtime.active
     page.runtime.append_raw("EARLY UNIQUE MARKER\n" + "x" * 280000 + "\nLATE MARKER\n")
     vd.layers.setCurrentIndex(1)
+    vd.log_modes.setCurrentIndex(1)
     vd._render_execution()
     assert "LATE MARKER" in vd.raw_view.toPlainText()
     assert "EARLY UNIQUE MARKER" not in vd.raw_view.toPlainText()

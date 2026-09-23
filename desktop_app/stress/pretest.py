@@ -242,11 +242,43 @@ class PreTestEnvironmentRunner:
                 "printf \"[MISSING] ros2: /opt/ros/humble/setup.bash not found\\n\"; exit 0; fi; "
                 "source /opt/ros/humble/setup.bash >/dev/null 2>&1 || { "
                 "printf \"[MISSING] ros2: failed to source Humble setup\\n\"; exit 0; }; "
+                "if [ -f /opt/vindynamics/system/setup.bash ]; then "
+                "source /opt/vindynamics/system/setup.bash >/dev/null 2>&1; "
+                "fi; "
                 "if ! command -v ros2 >/dev/null 2>&1 || ! ros2 --help >/dev/null 2>&1; then "
                 "printf \"[MISSING] ros2: unavailable after sourcing Humble setup\\n\"; exit 0; fi; "
-                "printf \"[PASS] ros2\\n\"; ros2 node list 2>&1'"
+                "printf \"[PASS] ros2\\n\"; "
+                "nodes=$(ros2 node list 2>&1); "
+                "printf \"%s\\n\" \"$nodes\"; "
+                "if [ -n \"$nodes\" ]; then "
+                "printf \"[PASS] ros2_graph\\n\"; "
+                "else "
+                "printf \"[FAIL] ros2_graph\\n\"; "
+                "fi'"
             ),
-            "sensors": "lsusb 2>&1; ls -l /dev/video* 2>&1 || true; printf 'Target topic names are not configured.\\n'",
+            "sensors": (
+                "bash -lc '"
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1 || exit 0; "
+                "source /opt/vindynamics/system/setup.bash >/dev/null 2>&1 || true; "
+                "for spec in "
+                "CAMERA:/sensors/camera/zed_x_mini/rgb "
+                "LIDAR:/sensors/lidar/mid360/pointcloud "
+                "IMU:/control/state/imu_state "
+                "BATTERY:/control/state/pmu_state "
+                "MOTOR:/control/state/motor_state; "
+                "do "
+                "name=${spec%%:*}; "
+                "topic=${spec#*:}; "
+                "info=$(timeout 3 ros2 topic info \"$topic\" 2>&1); "
+                "printf \"%s\\n\" \"$info\"; "
+                "if printf \"%s\\n\" \"$info\" | grep -Eq \"Publisher count: [1-9]\"; then "
+                "printf \"[PASS] %s %s\\n\" \"$name\" \"$topic\"; "
+                "else "
+                "printf \"[FAIL] %s %s\\n\" \"$name\" \"$topic\"; "
+                "fi; "
+                "done; "
+                "printf \"[INFO] ESTOP_SOURCE /control/state/pmu_state field=hw_estop_state\\n\"'"
+            ),
             "kernel": "dmesg --level=emerg,alert,crit,err,warn 2>&1 | tail -n 200; journalctl -p warning..alert -b -n 200 --no-pager 2>&1",
         }
         outputs = {}
@@ -269,6 +301,9 @@ class PreTestEnvironmentRunner:
         tool_text = payload.get("tools", {}).get("stdout", "")
         ros2_item = payload.get("ros2", {})
         ros2_text = ros2_item.get("stdout", "") + ros2_item.get("stderr", "")
+
+        sensor_item = payload.get("sensors", {})
+        sensor_text = sensor_item.get("stdout", "") + sensor_item.get("stderr", "")
         checks = [
             PreTestCheck(
                 "target_connection",
@@ -281,24 +316,103 @@ class PreTestEnvironmentRunner:
         ]
         for tool in TOOLS:
             passed = f"[PASS] {tool}" in (ros2_text if tool == "ros2" else tool_text)
+
             if tool == "ros2":
-                actual = "Available after sourcing /opt/ros/humble/setup.bash" if passed else "Unavailable after sourcing /opt/ros/humble/setup.bash"
+                actual = (
+                    "Available after sourcing ROS 2 + VinDynamics environment"
+                    if passed
+                    else "Unavailable after sourcing ROS 2 + VinDynamics environment"
+                )
+                status = PreTestStatus.PASS if passed else PreTestStatus.MISSING
+
+            elif tool == "sensors" and not passed:
+                actual = "Optional on Jetson; thermal data available via tegrastats/sysfs"
+                status = PreTestStatus.NOT_APPLICABLE
+
             else:
                 actual = "Available" if passed else "Not found in PATH"
-            checks.append(PreTestCheck(f"tool_{tool}", f"Tool: {tool}", "Tools", actual, PreTestStatus.PASS if passed else PreTestStatus.MISSING, PreTestEnvironmentRunner._tool_dependency(tool)))
+                status = PreTestStatus.PASS if passed else PreTestStatus.MISSING
+
+            checks.append(
+                PreTestCheck(
+                    f"tool_{tool}",
+                    f"Tool: {tool}",
+                    "Tools",
+                    actual,
+                    status,
+                    PreTestEnvironmentRunner._tool_dependency(tool),
+                )
+            )
         checks.append(PreTestCheck("logging", "Logging path writable", "Resources", str(output_dir), PreTestStatus.PASS, "logging", True))
-        for check_id, name, dependency, actual in (
-            ("ethernet", "Ethernet / target network", "network", "Interface captured; required peer/IP not configured"),
-            ("can", "CAN", "can", "CAN interface not configured"),
-            ("ros2", "ROS 2 graph", "ros2", "Graph captured; required nodes/topics not configured"),
-            ("camera", "Camera", "camera", "Required stream/topic not configured"),
-            ("lidar", "LiDAR", "lidar", "Required device/topic not configured"),
-            ("imu", "IMU", "imu", "Required topic not configured"),
-            ("battery", "Battery", "battery", "Battery source/range not configured"),
-            ("motor", "Motor status", "motor", "Feedback/fault source not configured"),
-            ("estop", "E-stop", "estop", "Physical verification required"),
-        ):
-            checks.append(PreTestCheck(check_id, name, "Target", actual, PreTestStatus.NOT_CONFIGURED, dependency))
+        checks.append(
+            PreTestCheck(
+                "ethernet",
+                "Ethernet / target network",
+                "Target",
+                "Interface captured; required peer/IP not configured",
+                PreTestStatus.NOT_CONFIGURED,
+                "network",
+            )
+        )
+
+        checks.append(
+            PreTestCheck(
+                "can",
+                "CAN",
+                "Target",
+                "CAN interface not configured",
+                PreTestStatus.NOT_CONFIGURED,
+                "can",
+            )
+        )
+
+        ros_graph_ok = "[PASS] ros2_graph" in ros2_text
+        checks.append(
+            PreTestCheck(
+                "ros2",
+                "ROS 2 graph",
+                "Target",
+                "ROS 2 environment and graph available"
+                if ros_graph_ok
+                else "ROS 2 environment or graph unavailable",
+                PreTestStatus.PASS if ros_graph_ok else PreTestStatus.FAIL,
+                "ros2",
+            )
+        )
+
+        probes = (
+            ("camera", "Camera", "camera", "CAMERA", "/sensors/camera/zed_x_mini/rgb"),
+            ("lidar", "LiDAR", "lidar", "LIDAR", "/sensors/lidar/mid360/pointcloud"),
+            ("imu", "IMU", "imu", "IMU", "/control/state/imu_state"),
+            ("battery", "Battery", "battery", "BATTERY", "/control/state/pmu_state"),
+            ("motor", "Motor status", "motor", "MOTOR", "/control/state/motor_state"),
+        )
+
+        for check_id, name, dependency, marker, topic in probes:
+            passed = f"[PASS] {marker} {topic}" in sensor_text
+            checks.append(
+                PreTestCheck(
+                    check_id,
+                    name,
+                    "Target",
+                    f"{topic}: publisher available"
+                    if passed
+                    else f"{topic}: publisher unavailable",
+                    PreTestStatus.PASS if passed else PreTestStatus.FAIL,
+                    dependency,
+                )
+            )
+
+        checks.append(
+            PreTestCheck(
+                "estop",
+                "E-stop",
+                "Target",
+                "Source available: /control/state/pmu_state field=hw_estop_state; expected safe state not configured",
+                PreTestStatus.NOT_CONFIGURED,
+                "estop",
+            )
+        )
         kernel_output = (payload.get("kernel", {}).get("stdout", "") + payload.get("kernel", {}).get("stderr", "")).strip()
         kernel_status = PreTestStatus.WARNING if kernel_output else PreTestStatus.PASS
         checks.append(PreTestCheck("kernel", "Kernel/system errors", "Kernel", "Review captured warnings" if kernel_output else "No warning/error output", kernel_status))

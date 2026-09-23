@@ -10,6 +10,7 @@ class RuntimeStatus(str, Enum):
     NOT_RUN = "NOT_RUN"
     WAITING = "WAITING"
     STARTING = "STARTING"
+    PREPARED = "PREPARED"
     RUNNING = "RUNNING"
     STOPPING = "STOPPING"
     PASS = "PASS"

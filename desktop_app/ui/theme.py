@@ -1,3 +1,12 @@
+STRESS_CHART_COLORS = {
+    "blue": "#155EEF",
+    "orange": "#F79009",
+    "red": "#D92D20",
+    "purple": "#7F56D9",
+    "green": "#039855",
+}
+
+
 APP_STYLE = """
 * {
     font-family: "DejaVu Sans", "Noto Sans", sans-serif;
@@ -199,6 +208,10 @@ QPushButton#PrimaryButton:hover {
     background: #004EEB;
 }
 
+QPushButton#PrimaryButton:pressed {
+    background: #00359E;
+}
+
 QPushButton#PrimaryButton:disabled {
     background: #B2CCFF;
     border-color: #B2CCFF;
@@ -230,26 +243,46 @@ QPushButton#OutlineButton:disabled {
 }
 
 QPushButton#DangerButton {
-    background: #FFFFFF;
-    border: 1px solid #F97066;
+    background: #D92D20;
+    border: 1px solid #D92D20;
     border-radius: 6px;
-    color: #D92D20;
+    color: #FFFFFF;
     padding: 9px 16px;
     font-weight: 700;
 }
 
+QPushButton#DangerButton:hover { background: #B42318; }
+QPushButton#DangerButton:pressed { background: #912018; }
+QPushButton#DangerButton:disabled { background: #FECDCA; border-color: #FECDCA; color: #912018; }
+
+QPushButton#SuccessButton {
+    background: #067647;
+    border: 1px solid #067647;
+    border-radius: 6px;
+    color: #FFFFFF;
+    padding: 9px 16px;
+    font-weight: 700;
+}
+
+QPushButton#SuccessButton:hover { background: #05603A; }
+QPushButton#SuccessButton:pressed { background: #054F31; }
+QPushButton#SuccessButton:disabled { background: #ABEFC6; border-color: #ABEFC6; color: #085D3A; }
+
 QPushButton#WarningButton {
-    background: #FFFAEB;
+    background: #F79009;
     border: 1px solid #F79009;
     border-radius: 6px;
-    color: #93370D;
+    color: #FFFFFF;
     padding: 9px 16px;
     font-weight: 700;
 }
 
 QPushButton#WarningButton:hover {
-    background: #FEF0C7;
+    background: #DC6803;
 }
+
+QPushButton#WarningButton:pressed { background: #B54708; }
+QPushButton#WarningButton:disabled { background: #FEDF89; border-color: #FEDF89; color: #93370D; }
 
 QPushButton#SmallButton, QToolButton#SmallButton {
     background: #FFFFFF;
@@ -265,6 +298,9 @@ QPushButton#SmallButton:checked {
     color: #175CD3;
     font-weight: 700;
 }
+
+QPushButton#SmallButton:hover, QToolButton#SmallButton:hover { background: #F2F4F7; border-color: #98A2B3; }
+QPushButton#SmallButton:pressed, QToolButton#SmallButton:pressed { background: #EAECF0; }
 
 QLineEdit, QComboBox, QSpinBox {
     background: #FFFFFF;
@@ -316,6 +352,134 @@ QFrame#StressPanel, QFrame#StressFilterBar {
     background: #FFFFFF;
     border: 1px solid #D8E0EB;
     border-radius: 8px;
+}
+
+QWidget#StressExecutionView, QWidget#StressExecutionContent,
+QScrollArea#StressExecutionScroll, QScrollArea#StressExecutionScroll > QWidget > QWidget {
+    background: #F6F8FC;
+}
+
+QFrame#ActiveTestCard, QFrame#CaseMonitorPanel, QFrame#ExecutionActionBar {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 10px;
+}
+
+QFrame#ExecutionActionBar {
+    border-color: #C9D7EC;
+}
+
+QLabel#ActiveTestIcon {
+    background: #EAF2FF;
+    border: 1px solid #B2CCFF;
+    border-radius: 9px;
+    color: #155EEF;
+    font-size: 24px;
+    font-weight: 800;
+}
+
+QLabel#ActiveTestTitle {
+    color: #101828;
+    font-size: 18px;
+    font-weight: 800;
+}
+
+QLabel#SectionTitle {
+    color: #182230;
+    font-size: 15px;
+    font-weight: 750;
+}
+
+QLabel#MetricCaption, QLabel#DashboardMetricLabel {
+    color: #667085;
+    font-size: 11px;
+}
+
+QLabel#ActiveSummaryValue {
+    color: #182230;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+QFrame#DashboardSeparator {
+    color: #E4E7EC;
+    max-width: 1px;
+}
+
+QLabel#DomainBadge {
+    color: #175CD3;
+    background: #EFF8FF;
+    border: 1px solid #B2DDFF;
+    border-radius: 8px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QFrame#CaseMetricField {
+    border-right: 1px solid #EAECF0;
+}
+
+QLabel#CaseMetricValue {
+    color: #182230;
+    font-size: 13px;
+    font-weight: 750;
+}
+
+QFrame#MetricDashboardCard {
+    background: #FFFFFF;
+    border: 1px solid #E4E7EC;
+    border-radius: 8px;
+}
+
+QFrame#MetricDashboardCard[relevant="true"] {
+    background: #F8FBFF;
+    border-color: #B2CCFF;
+}
+
+QFrame#MetricDashboardCard[state="ok"] { border-color: #ABEFC6; }
+QFrame#MetricDashboardCard[state="warning"] { border-color: #FEDF89; }
+QFrame#MetricDashboardCard[state="error"] { border-color: #FECDCA; }
+QFrame#MetricDashboardCard[state="suspect"] { border-color: #D6BBFB; }
+
+QLabel#DashboardCardTitle {
+    color: #344054;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#DashboardMetricValue {
+    color: #182230;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QPushButton#SegmentButton {
+    background: #FFFFFF;
+    border: 1px solid #D0D5DD;
+    color: #475467;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 650;
+}
+
+QPushButton#SegmentButton:checked {
+    background: #EAF2FF;
+    border-color: #84ADFF;
+    color: #155EEF;
+}
+
+QTableWidget#ExecutionQueueTable {
+    border: 0;
+    border-radius: 0;
+}
+
+QTableWidget#ExecutionQueueTable QProgressBar {
+    min-height: 14px;
+    max-height: 14px;
+    color: #344054;
+    font-size: 10px;
+    text-align: center;
 }
 
 QFrame#HeaderSeparator {
@@ -372,6 +536,12 @@ QLabel#StatusBadge[tone="warning"] {
 }
 
 QLabel#StatusBadge[tone="running"] {
+    color: #175CD3;
+    background: #EFF8FF;
+    border: 1px solid #B2DDFF;
+}
+
+QLabel#StatusBadge[tone="prepared"] {
     color: #175CD3;
     background: #EFF8FF;
     border: 1px solid #B2DDFF;
