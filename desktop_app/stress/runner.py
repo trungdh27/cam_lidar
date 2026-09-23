@@ -37,6 +37,8 @@ class _ImmediateBaselineThread(QThread):
 class StressTestRunner(QObject):
     queue_changed = Signal(object)
     confirmation_required = Signal(object, object)
+    test_prepared = Signal(object, object)
+    prepared_discarded = Signal(object)
     test_started = Signal(object, object)
     test_updated = Signal(object)
     test_finished = Signal(object, object)
@@ -59,6 +61,12 @@ class StressTestRunner(QObject):
         self.started_at_iso: str | None = None
         self._pending_final_status: RuntimeStatus | None = None
         self.current_strategy = None
+
+        # Session-wide baseline captured by PRE-TEST ENVIRONMENT.
+        # Selecting a test must not trigger another immediate baseline.
+        self.pretest_baseline: dict = {}
+        self.pretest_stress_ng_available: bool | None = None
+
         self._baseline_thread = None
         self._baseline_request_id = None
         self.elapsed_timer = QTimer(self)
@@ -76,9 +84,20 @@ class StressTestRunner(QObject):
             RuntimeStatus.STOPPING,
         }
 
-    def enqueue(self, definitions: list[StressTestDefinition], *, environment_status: EnvironmentStatus, override: bool = False, blocking_reasons: list[str] | None = None) -> bool:
+    def enqueue(
+        self,
+        definitions: list[StressTestDefinition],
+        *,
+        environment_status: EnvironmentStatus,
+        override: bool = False,
+        blocking_reasons: list[str] | None = None,
+        baseline: dict | None = None,
+        stress_ng_available: bool | None = None,
+    ) -> bool:
         if self.running:
-            self.error.emit("A stress test is already running")
+            self.error.emit(
+                "A test is currently running. Stop or finish it before selecting another test."
+            )
             return False
         if not definitions:
             self.error.emit("Select one or more test cases")
@@ -91,6 +110,15 @@ class StressTestRunner(QObject):
         if not valid:
             self.error.emit(detail)
             return False
+        if self.current is not None:
+            if self.current.runtime_status == RuntimeStatus.PREPARED:
+                self.discard_prepared()
+            else:
+                self.error.emit("The current test cannot be replaced in its present state.")
+                return False
+
+        self.pretest_baseline = dict(baseline or {})
+        self.pretest_stress_ng_available = stress_ng_available
         self.session_manager.create_session(self.platform)
         self.session_manager.update_environment(environment_status, reasons, override=override)
         self.session_manager.set_selected_tests([item.test_id for item in definitions])
@@ -101,23 +129,74 @@ class StressTestRunner(QObject):
         self._prepare_next()
         return True
 
+    def discard_prepared(self) -> bool:
+        """Discard an unstarted selection without creating an execution result."""
+        if self.current is None or self.current.runtime_status != RuntimeStatus.PREPARED:
+            return False
+
+        discarded = self.current
+        for definition in (self.current, *self.queue):
+            if definition.runtime_status in {RuntimeStatus.PREPARED, RuntimeStatus.WAITING}:
+                definition.runtime_status = RuntimeStatus.NOT_RUN
+
+        self.current = None
+        self.queue = []
+        self.current_paths = None
+        self.current_strategy = None
+        self.evidence_manager = None
+        self.started_monotonic = None
+        self.started_at_iso = None
+        self._pending_final_status = None
+        if self.session_manager.session_dir is not None:
+            self.session_manager.set_selected_tests([])
+        self.queue_changed.emit([])
+        self.prepared_discarded.emit(discarded)
+        return True
+
     def _prepare_next(self) -> None:
         if not self.queue:
             self.current = None
             self.current_paths = None
+
             if self.session_manager.session_dir is not None:
                 self.session_manager.finish_session()
+
             self.queue_finished.emit()
             return
+
         self.current = self.queue.pop(0)
-        self.current.runtime_status = RuntimeStatus.STARTING
-        self.current_paths = self.session_manager.create_attempt(self.current)
+        self.current.runtime_status = RuntimeStatus.PREPARED
+        self.current_paths = None
+        self.evidence_manager = None
         self.current_strategy = None
-        self.queue_changed.emit(([self.current] if self.current else []) + self.queue)
-        if self.current.test_id in SUPPORTED_ADAPTIVE_CPU_IDS:
-            self._begin_immediate_baseline()
-        else:
-            self.confirmation_required.emit(self.current, self.current_paths)
+
+        self.queue_changed.emit(
+            ([self.current] if self.current else []) + self.queue
+        )
+
+        # ----------------------------------------------------
+        # Strategy source
+        # ----------------------------------------------------
+        # PRE-TEST ENVIRONMENT is the authoritative baseline
+        # for this selected test. Selecting a test never starts
+        # another measurement and never starts artificial load.
+        self.current_strategy = decision_for_definition(
+            self.current,
+            self.pretest_baseline,
+            self.pretest_stress_ng_available,
+        )
+
+        self.strategy_ready.emit(
+            self.current,
+            self.current_strategy,
+        )
+
+        self.test_prepared.emit(
+            self.current,
+            None,
+        )
+
+        self.test_updated.emit(self.current)
 
     def _begin_immediate_baseline(self) -> None:
         if self.current is None or self.current_paths is None:
@@ -189,7 +268,10 @@ class StressTestRunner(QObject):
         self.confirmation_required.emit(self.current, self.current_paths)
 
     def start_current(self) -> bool:
-        if self.current is None or self.current_paths is None or self.current.runtime_status != RuntimeStatus.STARTING:
+        if (
+            self.current is None
+            or self.current.runtime_status != RuntimeStatus.PREPARED
+        ):
             return False
         if self.current.test_id in SUPPORTED_ADAPTIVE_CPU_IDS:
             if self.current_strategy is None or not self.current_strategy.can_start:
@@ -198,23 +280,52 @@ class StressTestRunner(QObject):
                     reason = "stress-ng is required for LOAD_ASSIST but is not available on the DUT"
                 self.error.emit(reason)
                 return False
+        self.current.runtime_status = RuntimeStatus.STARTING
+        try:
+            self.current_paths = self.session_manager.create_attempt(self.current)
+            atomic_write_json(
+                self.current_paths.attempt_dir / "load_strategy.json",
+                self.current_strategy.to_dict() if self.current_strategy else {},
+            )
+            atomic_write_json(
+                self.current_paths.attempt_dir / "pretest_baseline.json",
+                self.pretest_baseline,
+            )
+            self.evidence_manager = EvidenceManager(
+                self.current,
+                self.current_paths.attempt_dir,
+                remote_service=self.remote_service,
+                strategy_decision=self.current_strategy,
+                parent=self,
+            )
+            self.evidence_manager.evidence_changed.connect(self._on_evidence_changed)
+            self.evidence_manager.all_stopped.connect(self._on_all_stopped)
+            self.session_manager.update_manifest(
+                self.current_paths,
+                self.evidence_manager.records,
+                self.current.test_id,
+            )
+        except Exception as exc:
+            self.current.runtime_status = RuntimeStatus.PREPARED
+            self.current_paths = None
+            self.evidence_manager = None
+            self.error.emit(f"Unable to create stress test attempt: {type(exc).__name__}: {exc}")
+            return False
+
         self.started_monotonic = time.monotonic()
         self.started_at_iso = utc_now()
         self.current.runtime_status = RuntimeStatus.RUNNING
         self._pending_final_status = None
-        self.evidence_manager = EvidenceManager(
-            self.current,
-            self.current_paths.attempt_dir,
-            remote_service=self.remote_service,
-            strategy_decision=self.current_strategy,
-            parent=self,
-        )
-        self.evidence_manager.evidence_changed.connect(self._on_evidence_changed)
-        self.evidence_manager.all_stopped.connect(self._on_all_stopped)
-        self.session_manager.update_manifest(self.current_paths, self.evidence_manager.records, self.current.test_id)
         info_path = self.current_paths.attempt_dir / "test_info.json"
         info = json.loads(info_path.read_text(encoding="utf-8"))
-        info.update(start_time=self.started_at_iso, status=RuntimeStatus.RUNNING.value)
+        info.update(
+            start_time=self.started_at_iso,
+            status=RuntimeStatus.RUNNING.value,
+            baseline_source="PRE_TEST",
+            baseline_file="pretest_baseline.json",
+            load_strategy=self.current_strategy.strategy.value if self.current_strategy else None,
+            target_cpu_percent=self.current_strategy.target_percent if self.current_strategy else None,
+        )
         atomic_write_json(info_path, info)
         self.elapsed_timer.start()
         self.test_started.emit(self.current, self.evidence_manager)
@@ -286,6 +397,30 @@ class StressTestRunner(QObject):
         self.session_manager.update_manifest(self.current_paths, records, self.current.test_id)
         warnings = [record.error or record.name for record in records if record.status == CollectorStatus.WARNING]
         errors = [record.error or record.name for record in records if record.status == CollectorStatus.ERROR]
+        # A completed execution always owns a portable snapshot, even when the
+        # runner is used without the Qt dashboard.  The UI enriches this same
+        # file from its already-parsed live state when it handles test_finished.
+        atomic_write_json(
+            self.current_paths.attempt_dir / "final_metrics.json",
+            {
+                "captured_at": end_time,
+                "elapsed_sec": round(elapsed, 3),
+                "test": {
+                    "test_id": self.current.test_id,
+                    "test_name": self.current.test_name,
+                    "group": self.current.group,
+                    "duration_sec": self.current.duration_seconds,
+                    "execution_type": self.current.execution_type.value,
+                },
+                "case_monitor": {},
+                "system": {},
+                "trends": {},
+                "warning_count": len(warnings),
+                "error_count": len(errors),
+                "warnings": warnings,
+                "errors": errors,
+            },
+        )
         result = {
             "test_id": self.current.test_id,
             "attempt": self.current_paths.attempt,
@@ -298,11 +433,15 @@ class StressTestRunner(QObject):
             "errors": errors,
             "evidence_manifest": "evidence_manifest.json",
             "load_strategy": self.current_strategy.strategy.value if self.current_strategy else None,
+            "review_status": None,
+            "review_comment": "",
+            "reviewed_at": None,
+            "final_metrics_file": "final_metrics.json",
         }
         self.session_manager.write_result(self.current_paths, result)
         info_path = self.current_paths.attempt_dir / "test_info.json"
         info = json.loads(info_path.read_text(encoding="utf-8"))
-        info.update(end_time=end_time, status=status.value)
+        info.update(end_time=end_time, status=status.value, final_metrics_file="final_metrics.json")
         atomic_write_json(info_path, info)
         finished_definition = self.current
         finished_paths = self.current_paths

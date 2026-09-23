@@ -30,6 +30,8 @@ COMMON_EVIDENCE = (
     _evidence("workload", "Workload / Test Action", "workload", "Capture the approved workload or guided action output."),
     _evidence("system_metrics", "System Metrics", "system_metrics", "CPU, per-core availability, load, RAM, swap, and uptime snapshots.", interval=5),
     _evidence("hardware_metrics", "Hardware / Thermal Metrics", "tegrastats", "Jetson hardware, frequency, power, and thermal metrics when available.", interval=5),
+    _evidence("robot_metrics", "Robot Power / Motor Metrics", "robot_metrics", "Battery, PMU, motor alive/error state and motor temperatures.", interval=2),
+    _evidence("sensor_health_auto", "Sensor / ROS Health", "sensor_health_auto", "Live Camera FPS, LiDAR Hz, IMU Hz and ROS graph health.", interval=5),
     _evidence("kernel_log", "Kernel Error Log", "dmesg", "Kernel messages without clearing the kernel buffer."),
     _evidence("journal", "System Journal", "journal", "System service and error messages."),
 )
@@ -37,7 +39,7 @@ COMMON_EVIDENCE = (
 
 GROUP_EVIDENCE: dict[str, tuple[EvidenceDefinition, ...]] = {
     "cpu": (
-        _evidence("function_cpu", "CPU / GPU / AI Measurements", "manual", "Record utilization, frequency, temperature, process load, and AI FPS/latency where applicable.", manual=True),
+        _evidence("function_cpu", "CPU / GPU / AI Runtime Metrics", "performance_auto", "Automatically collect CPU/GPU/RAM/temperature metrics and detect available AI runtime nodes.", interval=2),
     ),
     "memory": (
         _evidence("memory_trend", "Memory Trend", "vmstat", "Used/available RAM, swap, RSS, and trend over time.", interval=5),
@@ -51,11 +53,11 @@ GROUP_EVIDENCE: dict[str, tuple[EvidenceDefinition, ...]] = {
         _evidence("communication", "Communication Health", "manual", "Throughput, latency, jitter, loss, counters, or CAN traffic as applicable.", manual=True),
     ),
     "sensor": (
-        _evidence("sensor_health", "Sensor Health", "manual", "FPS/Hz, bandwidth, timestamp, and dropped frame/message evidence.", manual=True),
+        _evidence("sensor_health", "Sensor Health", "sensor_health_auto", "Automatically collect Camera FPS, LiDAR Hz, IMU Hz and ROS graph health.", interval=5),
         _evidence("sensor_sample", "Sensor Sample / Bag", "manual", "Attach a representative image, point cloud, or ROS bag when applicable.", evidence_type="artifact", manual=True),
     ),
     "motor": (
-        _evidence("motor_feedback", "Motor Command / Feedback", "manual", "Position, velocity, current, temperature, and fault status.", manual=True),
+        _evidence("motor_feedback", "Motor Command / Feedback", "robot_metrics", "Automatically collect motor alive/error state and motor temperature statistics.", interval=2),
         _evidence("video", "Video Evidence", "manual", "Attach video where physical motion or actuator behavior must be observed.", evidence_type="artifact", manual=True),
     ),
     "motion": (
@@ -63,15 +65,15 @@ GROUP_EVIDENCE: dict[str, tuple[EvidenceDefinition, ...]] = {
         _evidence("video", "Video Evidence", "manual", "Attach video of the complete motion scenario.", evidence_type="artifact", manual=True),
     ),
     "power": (
-        _evidence("power_measurements", "Power / Battery Measurements", "manual", "Voltage, current, power, minima, maxima, and peaks.", manual=True),
+        _evidence("power_measurements", "Power / Battery Measurements", "robot_metrics", "Automatically collect battery SOC/SOH, pack voltage/current and motor-bus electrical metrics.", interval=2),
         _evidence("power_waveform", "External Power Waveform", "manual", "Attach power-analyzer or oscilloscope evidence when required.", evidence_type="artifact", manual=True),
     ),
     "thermal": (
-        _evidence("thermal_trend", "Thermal Trend", "manual", "Temperature, load, frequency, and throttling trend.", manual=True),
+        _evidence("thermal_trend", "Thermal Trend", "tegrastats", "Automatically collect Jetson CPU, GPU, SoC0, SoC1, SoC2, TJ, frequency and hardware thermal metrics.", interval=2),
         _evidence("thermal_image", "Thermal Image", "manual", "Attach thermal-camera evidence when required.", evidence_type="artifact", manual=True),
     ),
     "system": (
-        _evidence("sensor_health", "Sensor Health", "manual", "Periodic sensor FPS/Hz and drop checkpoints.", manual=True),
+        _evidence("sensor_health", "Sensor Health", "sensor_health_auto", "Automatically collect periodic Camera FPS, LiDAR Hz, IMU Hz and ROS health.", interval=5),
         _evidence("communication", "Communication Health", "manual", "Periodic network, CAN, and ROS communication checkpoints.", manual=True),
         _evidence("checkpoints", "Endurance Checkpoints", "manual", "Record scheduled system-health checkpoints.", manual=True),
     ),

@@ -115,11 +115,11 @@ def test_running_navigation_evidence_and_environment_history(tmp_path):
     attempt = page.runtime.active
     assert attempt.status == "RUNNING"
     assert vd.stack.currentWidget() is vd.execution_view
-    assert [vd.layers.tabText(i) for i in range(3)] == ["SUMMARY", "RAW LOG", "EVIDENCE"]
+    assert [vd.layers.tabText(i) for i in range(3)] == ["MEASUREMENTS", "TECHNICAL LOG", "EVIDENCE"]
     page.runtime.add_metrics({"RSSI": -64.0, "2.4 GHz Average": 8.7})
     assert vd.monitor.cards["2.4 GHz Average"].value.text() == "8.7 Mbps"
     assert vd.monitor.rssi_bars["RSSI"][0].isVisibleTo(vd.monitor)
-    assert vd.monitor.matrix.rowCount() == 2
+    assert vd.monitor.matrix.rowCount() == 1
     assert page.runtime.start("VD", vd.by_id["TC-WIFI-C24"]) is None
     vd.back_to_list()
     assert page.runtime.active is attempt
@@ -180,27 +180,16 @@ def test_safe_auto_uses_shared_connection_and_raw_log(tmp_path):
 
 
 def test_pretest_configured_read_only_checks(tmp_path):
+    from tests.test_wifi_auto_suite import ready_setup
     app()
     service = SharedService()
     page = WifiPage(service, evidence_root=tmp_path)
-    page.pretest.run_all()
-    assert len(service.operations) == 1
-    class FakeSSH:
-        async def run(self, command, timeout):
-            if command.startswith("nmcli -t"):
-                return result(command, "wlP1p1s0:wifi:connected")
-            if command.startswith("systemctl"):
-                return result(command, "active")
-            if command.startswith("nmcli -g"):
-                return result(command, "Hotspot")
-            if command.startswith("iw list"):
-                return result(command, "Supported interface modes:\n * AP")
-            if command.startswith("ip -brief"):
-                return result(command, "eno1 UP")
-            return result(command, "/usr/bin/tool")
-    results = asyncio.run(service.operations[0][1](FakeSSH()))
-    service.operation_succeeded.emit("wifi-pretest:1", results)
-    assert page.pretest.table.item(page.pretest.rows["Wi-Fi interface"], 2).text() == "PASS"
-    assert page.pretest.table.item(page.pretest.rows["Wi-Fi capability"], 2).text() == "PASS"
-    assert page.pretest.table.item(page.pretest.rows["Backup Ethernet"], 2).text() == "PASS"
+    page.runtime.auto_setup = ready_setup()
+    page.runtime.changed.emit()
+    assert page.pretest.table.item(page.pretest.rows["Wi-Fi interface"], 2).text() == "READY"
+    assert page.pretest.table.item(page.pretest.rows["Wi-Fi capability"], 2).text() == "READY"
+    page.runtime.auto_setup.backup_ethernet_ready = False
+    page.runtime.changed.emit()
+    assert page.pretest.table.item(page.pretest.rows["Backup Ethernet"], 2).text() == "OPTIONAL"
+    assert page.pretest.unresolved_setup.isHidden() and page.pretest.advanced_setup.isHidden()
     page.close()

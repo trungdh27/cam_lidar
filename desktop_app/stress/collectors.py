@@ -13,6 +13,334 @@ from .load_strategy import SUPPORTED_ADAPTIVE_CPU_IDS, LoadStrategy
 from .session import utc_now
 
 
+PERFORMANCE_AUTO_SCRIPT = r"""
+import re
+import subprocess
+import sys
+import time
+
+interval = float(sys.argv[1])
+
+ENV = (
+    "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+    "source /opt/vindynamics/system/setup.bash >/dev/null 2>&1; "
+)
+
+def run(command, timeout=5):
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", ENV + command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return result.stdout + result.stderr
+    except Exception:
+        return ""
+
+while True:
+    values = []
+
+    device = run(
+        "timeout 3 ros2 topic echo /systemdiag/metrics/device --once",
+        timeout=5,
+    )
+
+    def metric(key):
+        pattern = (
+            r"key:\s*" + re.escape(key) +
+            r"\s+value:\s*([-\d.]+)"
+        )
+        match = re.search(pattern, device)
+        return None if not match else float(match.group(1))
+
+    gpu = metric("device.gpu.usage_percent")
+    ram = metric("device.ram.used_percent")
+    cpu_temp = metric("device.temperature.cpu_celsius")
+
+    cpu_values = [
+        float(value)
+        for value in re.findall(
+            r"key:\s*device\.cpu\.usage_percent\s+value:\s*([-\d.]+)",
+            device,
+        )
+    ]
+
+    if cpu_values:
+        values.append(f"cpu_avg={sum(cpu_values)/len(cpu_values):.2f}")
+        values.append(f"cpu_min={min(cpu_values):.2f}")
+        values.append(f"cpu_max={max(cpu_values):.2f}")
+
+    if gpu is not None:
+        values.append(f"gpu_usage={gpu:.2f}")
+
+    if ram is not None:
+        values.append(f"ram_usage={ram:.2f}")
+
+    if cpu_temp is not None:
+        values.append(f"cpu_temp={cpu_temp:.2f}")
+
+    nodes = run("ros2 node list", timeout=5)
+    ai_nodes = [
+        line.strip()
+        for line in nodes.splitlines()
+        if line.strip()
+        and any(
+            token in line.lower()
+            for token in ("ai", "infer", "detect", "vision", "model")
+        )
+    ]
+
+    values.append(f"ai_nodes={len(ai_nodes)}")
+    values.append(f"ai_runtime_detected={1 if ai_nodes else 0}")
+
+    print(" ".join(values), flush=True)
+    time.sleep(interval)
+""".strip()
+
+
+ROS_SENSOR_HEALTH_SCRIPT = r"""
+import concurrent.futures
+import re
+import subprocess
+import sys
+import time
+
+interval = float(sys.argv[1])
+
+ENV = (
+    "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+    "source /opt/vindynamics/system/setup.bash >/dev/null 2>&1; "
+)
+
+TOPICS = {
+    "camera_fps": "/sensors/camera/zed_x_mini/rgb",
+    "lidar_hz": "/sensors/lidar/mid360/pointcloud",
+    "imu_hz": "/control/state/imu_state",
+}
+
+def run(command, timeout=5):
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", ENV + command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return result.stdout + result.stderr
+    except Exception:
+        return ""
+
+def topic_rate(name_topic):
+    name, topic = name_topic
+    output = run(f"timeout 3 ros2 topic hz {topic}", timeout=5)
+
+    matches = re.findall(
+        r"average rate:\s*([\d.]+)",
+        output,
+        re.IGNORECASE,
+    )
+
+    if not matches:
+        return name, None
+
+    try:
+        return name, float(matches[-1])
+    except ValueError:
+        return name, None
+
+while True:
+    values = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(topic_rate, TOPICS.items()))
+
+    for name, rate in results:
+        if rate is not None:
+            values.append(f"{name}={rate:.2f}")
+
+    nodes_output = run("ros2 node list", timeout=5)
+    nodes = [
+        line.strip()
+        for line in nodes_output.splitlines()
+        if line.strip().startswith("/")
+    ]
+
+    values.append(f"ros_nodes={len(nodes)}")
+    values.append(f"ros_health={1 if nodes else 0}")
+
+    print(" ".join(values), flush=True)
+    time.sleep(interval)
+""".strip()
+
+
+ROS_ROBOT_METRICS_SCRIPT = r"""
+import concurrent.futures
+import subprocess, time, sys, re
+
+interval = float(sys.argv[1])
+
+def run(cmd):
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", cmd],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.stdout
+    except Exception:
+        return ""
+
+env = (
+    "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+    "source /opt/vindynamics/system/setup.bash >/dev/null 2>&1; "
+)
+
+while True:
+    commands = (
+        env + "timeout 2 ros2 topic echo /control/state/pmu_state --once",
+        env + "timeout 2 ros2 topic echo /control/state/motor_state --once",
+    )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        pmu, motor = list(pool.map(run, commands))
+
+    values = []
+
+    def one(pattern, text, key):
+        match = re.search(pattern, text)
+        if match:
+            values.append(f"{key}={match.group(1)}")
+
+    one(r"batt1_soc:\s*([\d.]+)", pmu, "battery_soc")
+    one(r"batt1_soh:\s*([\d.]+)", pmu, "battery_soh")
+    one(r"batt1_pack_voltage:\s*([-\d.]+)", pmu, "battery_pack_voltage")
+    one(r"batt1_pack_current:\s*([-\d.]+)", pmu, "battery_pack_current")
+    one(r"motor_bus_voltage:\s*([-\d.]+)", pmu, "motor_bus_voltage")
+    one(r"motor_bus_current:\s*([-\d.]+)", pmu, "motor_bus_current")
+    one(r"motor_bus_error_code:\s*(\d+)", pmu, "motor_bus_error_code")
+
+    # Battery temperature array from PMU
+    batt_temp_match = re.search(
+        r"batt1_temperatures:\s*(.*?)(?=\n\S|\Z)",
+        pmu,
+        re.DOTALL,
+    )
+
+    battery_temperatures = []
+    if batt_temp_match:
+        battery_temperatures = [
+            float(value)
+            for value in re.findall(
+                r"-\s*([-\d.]+)",
+                batt_temp_match.group(1),
+            )
+        ]
+
+    if battery_temperatures:
+        values.append(
+            f"battery_temp_min={min(battery_temperatures):.2f}"
+        )
+        values.append(
+            f"battery_temp_avg={sum(battery_temperatures)/len(battery_temperatures):.2f}"
+        )
+        values.append(
+            f"battery_temp_max={max(battery_temperatures):.2f}"
+        )
+
+        for index, temperature in enumerate(
+            battery_temperatures,
+            start=1,
+        ):
+            values.append(
+                f"battery_temp_{index:02d}={temperature:.2f}"
+            )
+
+    temperatures = [
+        float(value)
+        for value in re.findall(
+            r"temperature_fb:\s*([-\d.]+)",
+            motor,
+        )
+    ]
+
+    alive = re.findall(
+        r"motor_alive:\s*(true|false)",
+        motor,
+        re.IGNORECASE,
+    )
+    errors = [
+        int(value)
+        for value in re.findall(r"error_code:\s*(\d+)", motor)
+    ]
+
+    if temperatures:
+        values.append(
+            f"motor_temp_min={min(temperatures):.2f}"
+        )
+        values.append(
+            f"motor_temp_avg={sum(temperatures)/len(temperatures):.2f}"
+        )
+        values.append(
+            f"motor_temp_max={max(temperatures):.2f}"
+        )
+
+        for index, temperature in enumerate(
+            temperatures,
+            start=1,
+        ):
+            values.append(
+                f"motor_temp_{index:02d}={temperature:.2f}"
+            )
+
+    if alive:
+        alive_count = sum(1 for value in alive if value.lower() == "true")
+        values.append(f"motor_alive={alive_count}")
+        values.append(f"motor_total={len(alive)}")
+
+    if errors:
+        error_count = sum(1 for value in errors if value != 0)
+        values.append(f"motor_errors={error_count}")
+
+    print(" ".join(values), flush=True)
+    time.sleep(interval)
+""".strip()
+
+
+THERMAL_ZONES_SCRIPT = r"""
+import datetime, glob, os, time, sys
+
+interval = float(sys.argv[1])
+
+while True:
+    stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    values = []
+
+    for zone in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+        try:
+            name = open(os.path.join(zone, "type"), encoding="ascii").read().strip()
+            raw = open(os.path.join(zone, "temp"), encoding="ascii").read().strip()
+            temp_c = float(raw) / 1000.0
+
+            safe_name = (
+                name.replace("-", "_")
+                    .replace(" ", "_")
+                    .replace("/", "_")
+                    .lower()
+            )
+            values.append(f"{safe_name}={temp_c:.2f}")
+        except (OSError, ValueError):
+            continue
+
+    print(f"{stamp} " + " ".join(values), flush=True)
+    time.sleep(interval)
+""".strip()
+
+
 SYSTEM_METRICS_SCRIPT = r"""
 import datetime, os, time
 interval=float(__import__('sys').argv[1])
@@ -433,6 +761,45 @@ class EvidenceManager(QObject):
             return sys.executable, ["-u", "-c", SYSTEM_METRICS_SCRIPT, interval], remote, CollectorStatus.ERROR
         if evidence.collector == "tegrastats":
             return "tegrastats", ["--interval", str(int(float(interval) * 1000))], f"exec tegrastats --interval {int(float(interval) * 1000)}", CollectorStatus.NOT_APPLICABLE
+        if evidence.collector == "thermal_zones":
+            remote = "exec " + shlex.join([
+                "python3",
+                "-u",
+                "-c",
+                THERMAL_ZONES_SCRIPT,
+                interval,
+            ])
+            return sys.executable, ["-u", "-c", THERMAL_ZONES_SCRIPT, interval], remote, CollectorStatus.NOT_APPLICABLE
+
+        if evidence.collector == "robot_metrics":
+            remote = "exec " + shlex.join([
+                "python3",
+                "-u",
+                "-c",
+                ROS_ROBOT_METRICS_SCRIPT,
+                interval,
+            ])
+            return sys.executable, ["-u", "-c", ROS_ROBOT_METRICS_SCRIPT, interval], remote, CollectorStatus.NOT_APPLICABLE
+
+        if evidence.collector == "sensor_health_auto":
+            remote = "exec " + shlex.join([
+                "python3",
+                "-u",
+                "-c",
+                ROS_SENSOR_HEALTH_SCRIPT,
+                interval,
+            ])
+            return sys.executable, ["-u", "-c", ROS_SENSOR_HEALTH_SCRIPT, interval], remote, CollectorStatus.NOT_APPLICABLE
+
+        if evidence.collector == "performance_auto":
+            remote = "exec " + shlex.join([
+                "python3",
+                "-u",
+                "-c",
+                PERFORMANCE_AUTO_SCRIPT,
+                interval,
+            ])
+            return sys.executable, ["-u", "-c", PERFORMANCE_AUTO_SCRIPT, interval], remote, CollectorStatus.NOT_APPLICABLE
         if evidence.collector == "dmesg":
             return "dmesg", ["-wT"], "exec dmesg -wT", CollectorStatus.WARNING
         if evidence.collector == "journal":
