@@ -69,7 +69,7 @@ def decide_cpu_strategy(
     if target_percent is None:
         return LoadStrategyDecision(LoadStrategy.NEEDS_REVIEW, None, baseline_percent, None, "No explicit CPU target is available; no target was inferred.", semantics, stress_ng_available)
     if baseline_percent is None:
-        return LoadStrategyDecision(LoadStrategy.NEEDS_REVIEW, target_percent, None, None, "No valid immediate CPU baseline is available; artificial load will not be injected.", semantics, stress_ng_available)
+        return LoadStrategyDecision(LoadStrategy.NEEDS_REVIEW, target_percent, None, None, "No valid PRE-TEST CPU baseline is available; artificial load will not be injected.", semantics, stress_ng_available)
     if semantics is None:
         return LoadStrategyDecision(LoadStrategy.NEEDS_REVIEW, target_percent, baseline_percent, None, "Target semantics are ambiguous; no safe automatic load strategy exists.", semantics, stress_ng_available)
     if semantics == TargetSemantics.MINIMUM and baseline_percent >= target_percent:

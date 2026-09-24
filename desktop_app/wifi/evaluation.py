@@ -22,36 +22,45 @@ class CriterionSpec:
     check: str = ""
     collector: str = ""
     parser: str = ""
+    importance: str = "CRITICAL"
+    expected_rule: dict | None = None
 
 
 def specs_for(case) -> list[CriterionSpec]:
     number = int(case.test_id.rsplit("C", 1)[1])
     if number == 1:
         return [
-            CriterionSpec("C01-01", "Wi-Fi interface exists", case.expected, "wlP1p1s0 exists", metric="Interface", check="interface", collector="nmcli/ip", parser="parse_nmcli_device_status/parse_ip_link"),
+            CriterionSpec("C01-01", "Wi-Fi interface exists", case.expected, "configured Wi-Fi interface exists", metric="Interface", check="interface", collector="nmcli/ip", parser="parse_nmcli_device_status/parse_ip_link"),
             CriterionSpec("C01-02", "NetworkManager device type", case.expected, "TYPE=wifi", metric="Device Type", check="wifi_type", collector="nmcli device status/show", parser="parse_nmcli_device_status/parse_nmcli_device_show"),
             CriterionSpec("C01-03", "NetworkManager runtime state", case.expected, "state != unavailable", metric="NetworkManager", check="nm_state", collector="nmcli device status/show", parser="parse_nmcli_device_status/parse_nmcli_device_show"),
             CriterionSpec("C01-04", "Kernel device detection", case.expected, 'no relevant "Device not found" error', metric="Kernel Device Errors", check="kernel", collector="journalctl -k -b", parser="parse_kernel_device_errors"),
             CriterionSpec("C01-05", "Driver detection", case.expected, "driver identified when exposed", metric="Driver/PHY", check="driver", collector="sysfs/ethtool", parser="parse_driver"),
-            CriterionSpec("C01-06", "Firmware / hardware recognition", case.expected, "reliable platform evidence", required=False, metric="Firmware", check="firmware", collector="ethtool -i", parser="parse_driver"),
+            CriterionSpec("C01-06", "Firmware / hardware recognition", case.expected, "reliable platform evidence", required=False, importance="INFORMATIONAL", expected_rule={"kind": "informational"}, metric="Firmware", check="firmware", collector="ethtool -i", parser="parse_driver"),
         ]
     if number == 3:
         return [CriterionSpec("C03-01", "NetworkManager service", case.expected, "active", metric="NetworkManager", check="active", collector="systemctl is-active NetworkManager", parser="parse_service_active"),
                 CriterionSpec("C03-02", "Hotspot profile", case.expected, "Hotspot present", metric="Hotspot profile", check="profile", collector="nmcli connection show", parser="parse_nmcli_profile_list"),
-                CriterionSpec("C03-03", "Wi-Fi interface visible to iw", case.expected, "wlP1p1s0 visible", metric="Interface", check="interface", collector="iw dev", parser="parse_iw_interface_role"),
+                CriterionSpec("C03-03", "Wi-Fi interface visible to iw", case.expected, "configured Wi-Fi interface visible", metric="Interface", check="interface", collector="iw dev", parser="parse_iw_interface_role"),
                 CriterionSpec("C03-04", "Runtime Wi-Fi role", case.expected, "managed or AP", metric="Role", check="role", collector="iw dev", parser="parse_iw_interface_role")]
     if number == 2:
         return [CriterionSpec("C02-01", "AP mode capability", case.expected, "AP supported", metric="AP capability", check="ap_supported", collector="iw list", parser="parse_iw_phy_capabilities"),
                 CriterionSpec("C02-02", "Required hardware bands", case.expected, "2.4 GHz and 5 GHz", metric="Supported Bands", check="both_bands", collector="iw list", parser="parse_iw_phy_capabilities"),
                 CriterionSpec("C02-03", "AP+STA concurrency", case.expected, "confirm if production requires concurrency", check="manual")]
     if number == 4:
+        from .catalog import load_config
+        config = load_config()
+        expected_ssid = config.get("Robot SSID", "NOT CONFIGURED")
+        expected_security = config.get("AP Security Requirement", "NOT CONFIGURED")
         return [CriterionSpec("C04-01", "Hotspot profile exists", case.expected, "Hotspot present", metric="Hotspot profile", check="profile_exists", collector="nmcli connection show", parser="parse_nmcli_profile_show"),
                 CriterionSpec("C04-02", "AP profile mode", case.expected, "mode=ap", metric="Mode", check="ap_mode", collector="nmcli connection show", parser="parse_nmcli_profile_show"),
-                CriterionSpec("C04-03", "Production SSID", case.expected, "matches production design", metric="SSID", check="manual"),
-                CriterionSpec("C04-04", "Security configuration", case.expected, "matches project requirement", metric="Security", check="manual"),
-                CriterionSpec("C04-05", "IPv4 sharing", case.expected, "shared if Jetson supplies DHCP", metric="IPv4 method", check="manual"),
-                CriterionSpec("C04-06", "Autoconnect and permissions", case.expected, "matches boot design", metric="Autoconnect", check="manual"),
-                CriterionSpec("C04-07", "Band and channel", case.expected, "matches design or auto", metric="Band", check="manual")]
+                CriterionSpec("C04-03", "Production SSID", case.expected,
+                              f"SSID = {expected_ssid}" if expected_ssid != "NOT CONFIGURED" else "NOT CONFIGURED",
+                              metric="SSID", check="manual"),
+                CriterionSpec("C04-04", "Security configuration", case.expected,
+                              expected_security, metric="Security", check="manual"),
+                CriterionSpec("C04-05", "IPv4 sharing", case.expected, "NOT CONFIGURED", metric="IPv4 method", check="manual"),
+                CriterionSpec("C04-06", "Autoconnect and permissions", case.expected, "NOT CONFIGURED", metric="Autoconnect", check="manual"),
+                CriterionSpec("C04-07", "Band and channel", case.expected, "NOT CONFIGURED", metric="Band", check="manual")]
     # Only requirements with an explicit machine-readable measurement get an
     # automated path. The source's remaining conditions stay visible for review.
     if number == 10:
@@ -77,19 +86,60 @@ def specs_for(case) -> list[CriterionSpec]:
                 CriterionSpec("C26-03", "Timeouts and packet loss", case.expected, "source/project limits met", check="manual")]
     if number == 27:
         return [CriterionSpec("C27-01", "Authentication evidence", case.expected, "valid/invalid credential behavior confirmed", check="manual"),
-                CriterionSpec("C27-02", "Production security restored", case.expected, "configuration restored", check="manual")]
+                CriterionSpec("C27-02", "Production security restored", case.expected, "configuration restored", check="manual"),
+                CriterionSpec("C27-03", "WPA2 operation", case.expected, "valid WPA2 client can use the network", check="manual"),
+                CriterionSpec("C27-04", "Required WPA3 / SAE operation", case.expected, "WPA3 works when mandatory; otherwise confirm not required", check="manual"),
+                CriterionSpec("C27-05", "Rejected client IPv4", case.expected, "invalid credential receives no robot-subnet IP", check="manual"),
+                CriterionSpec("C27-06", "Secret exposure", case.expected, "no plaintext PSK in evidence", check="manual")]
+    names = {
+        5: ("Hotspot activation", "Runtime AP mode", "Profile SSID", "Client SSID discovery"),
+        6: ("Authentication", "Client IPv4 / gateway", "AP subnet", "Packet loss", "SSH host identity"),
+        7: ("Invalid / missing credential rejection",),
+        9: ("Secret exposure", "Allowed services", "Invalid SSH credential rejection"),
+        11: ("Configured channel / width / power", "RF stability / configured limits"),
+        14: ("AP restoration", "Client recovery / ping", "Ethernet preservation", "Reboot-free recovery"),
+        15: ("Three AP autostart cycles", "Automatic DHCP / ping", "Configured boot-ready time"),
+        17: ("AP operation", "Ethernet preservation", "Production route preservation"),
+        18: ("Production Ethernet reachability", "Wi-Fi SSH", "Production service policy"),
+        19: ("Resource health", "Disruptive / repeated errors"),
+        20: ("Automatic production readiness", "Client usability", "Production network / services", "Serious errors"),
+        21: ("Hotspot activation", "AP mode", "Band", "SSID discovery", "Authentication / DHCP", "Ping / SSH", "Station evidence / stability", "Unexpected disconnects"),
+        22: ("AP activation", "Band", "SSID discovery", "Authentication / DHCP", "Ping / SSH", "Station evidence", "Regulatory errors / disconnects"),
+        24: ("Wi-Fi 6 capability / runtime HE", "Link stability / fallback"),
+        25: ("Factory discovery at >=1 m", "Client association / IPv4", "Ping / SSH", "Prolonged disconnects", "Local RF usability"),
+    }
     clauses = [clause.strip().rstrip(".") for clause in case.expected.split(";") if clause.strip()]
-    return [CriterionSpec(f"C{number:02d}-{index:02d}", "Source acceptance requirement",
-                          clause, clause, check="manual") for index, clause in enumerate(clauses, 1)]
+    result = []
+    for index, clause in enumerate(clauses):
+        name = names.get(number, ())[index] if index < len(names.get(number, ())) else clause
+        rule = None
+        expected = clause
+        if name == "Band" and number in {21, 22}:
+            expected = "2.4 GHz" if number == 21 else "5 GHz"
+            rule = {"kind": "band", "value": expected}
+        result.append(CriterionSpec(f"C{number:02d}-{index + 1:02d}", name,
+                                    clause, expected, check="manual", expected_rule=rule))
+    return result
 
 
-def evaluate(case, metrics: dict, evidence: dict, interface: str, elapsed_seconds: int = 0) -> tuple[list[dict], str, str]:
+
+def evaluate(case, metrics: dict, evidence: dict, interface: str, elapsed_seconds: int = 0,
+             manual_reviews: dict[str, dict] | None = None) -> tuple[list[dict], str, str]:
+    manual_reviews = manual_reviews or {}
     rows = []
     for spec in specs_for(case):
         actual = metrics.get(spec.metric) if spec.metric else None
         status, reason = "NOT_COLLECTED", "No parsed measurement was collected"
         if spec.check == "manual":
-            status, reason = "MANUAL_REQUIRED", "Human confirmation is required by the source requirement"
+            review = manual_reviews.get(spec.criterion_id, {})
+            reviewed = review.get("status")
+            if reviewed in {"PASS", "FAIL", "NEEDS REVIEW"}:
+                status = reviewed
+                reason = review.get("note") or f"Tester marked criterion {reviewed}"
+                if review.get("actual", "") != "":
+                    actual = review["actual"]
+            else:
+                status, reason = "MANUAL_REQUIRED", "Inline tester confirmation is required"
         elif spec.check == "interface":
             if actual == interface: status, reason = "PASS", "Interface detected"
             elif actual: status, reason = "FAIL", f"Expected {interface}; detected {actual}"
@@ -149,11 +199,16 @@ def evaluate(case, metrics: dict, evidence: dict, interface: str, elapsed_second
                  spec.collector.startswith("import") and name == "commands.log")]
         if spec.check == "kernel": refs = [name for name, item in evidence.items() if "journalctl -k" in item.get("command", "")]
         if spec.check == "driver": refs = [name for name, item in evidence.items() if "ethtool" in item.get("command", "") or "readlink" in item.get("command", "")]
-        rows.append({**asdict(spec), "actual": actual, "status": status,
+        rule = spec.expected_rule or {"kind": "source_requirement", "value": spec.expected}
+        if spec.check == "max100":
+            rule = {"kind": "maximum", "value": 100, "unit": "ms"}
+        elif spec.check in {"min5", "band_min5"}:
+            rule = {"kind": "minimum", "value": 5, "unit": "Mbps"}
+        rows.append({**asdict(spec), "expected_rule": rule, "actual": actual, "status": status,
                      "evidence_reference": refs, "reason": reason})
-    required = [row for row in rows if row["required"]]
+    required = [row for row in rows if row["required"] and row["importance"] == "CRITICAL"]
     failed = [row for row in required if row["status"] == "FAIL"]
-    pending = [row for row in required if row["status"] != "PASS"]
+    pending = [row for row in required if row["status"] not in {"PASS", "FAIL"}]
     if failed:
         result = "FAIL"
         reason = "; ".join(f"{row['criterion_id']}: {row['reason']} "

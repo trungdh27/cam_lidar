@@ -145,8 +145,19 @@ def parse_iperf3(raw: str, direction: str) -> dict[str, float]:
         f"Max {direction.lower()}": round(max(rates), 3) if rates else round(average, 3),
     }
     sent = end.get("sum_sent", {})
+    received = end.get("sum_received", {})
+    if isinstance(sent, dict) and isinstance(sent.get("bits_per_second"), (int, float)):
+        metrics["Sender Mbps"] = round(sent["bits_per_second"] / 1_000_000, 3)
+    if isinstance(received, dict) and isinstance(received.get("bits_per_second"), (int, float)):
+        metrics["Receiver Mbps"] = round(received["bits_per_second"] / 1_000_000, 3)
     if isinstance(sent, dict) and isinstance(sent.get("retransmits"), int):
         metrics["Retransmits"] = sent["retransmits"]
+    udp = end.get("sum") if isinstance(end.get("sum"), dict) else received
+    if isinstance(udp, dict):
+        if isinstance(udp.get("lost_percent"), (int, float)):
+            metrics["UDP loss"] = float(udp["lost_percent"])
+        if isinstance(udp.get("jitter_ms"), (int, float)):
+            metrics["UDP jitter"] = float(udp["jitter_ms"])
     return metrics
 
 

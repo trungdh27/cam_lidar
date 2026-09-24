@@ -39,9 +39,20 @@ from desktop_app.stress.pretest import (
     evaluate_readiness,
 )
 from desktop_app.stress.runner import StressTestRunner, scan_history
+from desktop_app.stress.results import (
+    latest_result_attempt,
+    load_result_snapshot,
+    persist_final_metrics,
+    review_attempt,
+)
 from desktop_app.stress.session import StressSessionManager
 from desktop_app.ui.main_window import MainWindow
-from desktop_app.ui.system_stress_page import StatusBadge, StressEvidenceViewer, SystemStressPage
+from desktop_app.ui.system_stress_page import (
+    StatusBadge,
+    StressEvidenceViewer,
+    SystemStressPage,
+    case_presentation_context,
+)
 
 
 SOURCE_HASH = hashlib.sha256(DEFAULT_VD_SOURCE.read_bytes()).hexdigest()
@@ -248,6 +259,61 @@ class SessionTests(unittest.TestCase):
         history = scan_history(self.root, self.item.test_id)
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["status"], "NEEDS_REVIEW")
+
+    def test_result_review_updates_existing_attempt_for_all_decisions(self):
+        self.manager.create_session("VD")
+        for status in (RuntimeStatus.PASS, RuntimeStatus.FAIL, RuntimeStatus.BLOCKED):
+            with self.subTest(status=status):
+                paths = self.manager.create_attempt(self.item)
+                marker = paths.logs_dir / "evidence.log"
+                marker.write_text("preserve", encoding="utf-8")
+                self.manager.write_result(
+                    paths,
+                    {"test_id": self.item.test_id, "attempt": paths.attempt, "status": "NEEDS_REVIEW"},
+                )
+                attempts_before = list(paths.attempt_dir.parent.glob("attempt_*"))
+                result = review_attempt(paths.attempt_dir, status, f"{status.value} note", reviewed_at="2026-09-23T00:00:00+00:00")
+                self.assertEqual(result["status"], status.value)
+                self.assertEqual(result["review_status"], status.value)
+                self.assertEqual(result["review_comment"], f"{status.value} note")
+                self.assertEqual(result["reviewed_at"], "2026-09-23T00:00:00+00:00")
+                info = json.loads((paths.attempt_dir / "test_info.json").read_text())
+                self.assertEqual(info["status"], status.value)
+                self.assertEqual(list(paths.attempt_dir.parent.glob("attempt_*")), attempts_before)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
+
+    def test_result_loader_is_backward_compatible_without_final_metrics(self):
+        self.manager.create_session("VD")
+        paths = self.manager.create_attempt(self.item)
+        self.manager.write_result(paths, {"test_id": self.item.test_id, "attempt": 1, "status": "STOPPED", "elapsed_sec": 4})
+        loaded = load_result_snapshot(paths.attempt_dir)
+        self.assertEqual(loaded["result"]["status"], "STOPPED")
+        self.assertEqual(loaded["final_metrics"], {})
+
+    def test_latest_result_attempt_ignores_newer_orphan_attempt(self):
+        self.manager.create_session("VD")
+        completed = self.manager.create_attempt(self.item)
+        self.manager.write_result(completed, {"test_id": self.item.test_id, "attempt": 1, "status": "PASS"})
+        orphan = self.manager.create_attempt(self.item)
+        self.assertFalse((orphan.attempt_dir / "result.json").exists())
+        self.assertEqual(latest_result_attempt(self.root, self.item.test_id), completed.attempt_dir)
+
+    def test_generic_non_cpu_snapshot_round_trips_unknown_domains(self):
+        self.manager.create_session("VD")
+        paths = self.manager.create_attempt(self.item)
+        self.manager.write_result(paths, {"test_id": self.item.test_id, "attempt": 1, "status": "NEEDS_REVIEW"})
+        snapshot = {
+            "captured_at": "2026-09-23T00:00:00+00:00",
+            "elapsed_sec": 9,
+            "test": {"test_id": self.item.test_id},
+            "system": {"memory": {"used_bytes": 1234}, "future_domain": {"value": 7}},
+            "trends": {"time": [9.0]},
+            "warnings": [],
+            "errors": [],
+        }
+        persist_final_metrics(paths.attempt_dir, snapshot)
+        self.assertEqual(load_result_snapshot(paths.attempt_dir)["final_metrics"], snapshot)
+        self.assertTrue((paths.attempt_dir / "evidence_manifest.json").exists())
 
 
 class ReadinessTests(unittest.TestCase):
@@ -481,9 +547,10 @@ class QtStressTests(unittest.TestCase):
             self.assertTrue(page.pretest_page.dut_label.isHidden())
             self.assertIn("Select a check", page.pretest_page.detail_area.toPlainText())
             self.assertFalse(hasattr(page.pretest_page, "view_details_button"))
-            self.assertEqual(page.pretest_page.run_baseline_button.text(), "RUN BASELINE")
-            self.assertLessEqual(page.pretest_page.run_baseline_button.parentWidget().maximumHeight(), 82)
-            self.assertIn("Run the baseline checks", page.pretest_page.dut_info_view.toPlainText())
+            self.assertTrue(page.pretest_page.run_baseline_button.isHidden())
+            self.assertEqual(page.pretest_page.run_all_button.text(), "CHECKS ALL")
+            self.assertTrue(page.pretest_page.export_button.isHidden())
+            self.assertIn("Run CHECKS ALL", page.pretest_page.dut_info_view.toPlainText())
             page.close()
 
     def test_folder_menu_changes_path_and_elides_with_full_tooltip(self):
@@ -820,11 +887,17 @@ class QtStressTests(unittest.TestCase):
             self.assertFalse(page.vd_page.active_banner.isHidden())
             self.assertIn(item.test_id, page.vd_page.active_test_label.text())
             self.assertFalse(page.vd_page.run_button.isEnabled())
-            self.assertEqual(page.vd_page.run_button.toolTip(), "A stress test is already running.")
+            self.assertEqual(
+                page.vd_page.run_button.toolTip(),
+                "A test is currently running. Stop or finish it before selecting another test.",
+            )
             self.assertTrue(process_until(lambda: page.runner.elapsed_seconds() > elapsed_before, timeout=2.5))
 
             page.run_selected([page.catalog.definitions[0]])
-            self.assertEqual(page.vd_page.message_label.text(), "A stress test is already running.")
+            self.assertEqual(
+                page.vd_page.message_label.text(),
+                "A test is currently running. Stop or finish it before selecting another test.",
+            )
             self.assertEqual(page.runner.queue, queue_before)
             self.assertIs(page.runner.current_paths, paths)
             self.assertEqual(
@@ -839,6 +912,377 @@ class QtStressTests(unittest.TestCase):
             page.runner.stop()
             self.assertTrue(process_until(lambda: item.runtime_status == RuntimeStatus.STOPPED))
             page.close()
+
+    def test_finish_freezes_persists_and_reopens_dashboard_for_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = SystemStressPage(evidence_root=directory)
+            item = definition(
+                "ST-RESULT-001",
+                evidence=(EvidenceDefinition("workload", "Workload", "log", "workload", "synthetic"),),
+                program=sys.executable,
+                arguments=("-c", "import time; time.sleep(30)"),
+            )
+            self.assertTrue(page.runner.enqueue([item], environment_status=EnvironmentStatus.READY))
+            self.assertTrue(page.runner.start_current())
+            self.assertTrue(process_until(lambda: item.runtime_status == RuntimeStatus.RUNNING))
+            attempt_dir = page.runner.current_paths.attempt_dir
+            dashboard = page.vd_page
+            dashboard._execution_metrics.state.cpu_usage = {"cpu": 81.4}
+            dashboard._execution_metrics._overall_samples = [73.9, 81.5, 89.0]
+            dashboard._thermal_zones = {"cpu_thermal": 63.5}
+            dashboard._robot_metrics = {"battery_soc": 72.0, "motor_alive": 12.0, "motor_total": 12.0}
+            dashboard._sensor_health = {"ros_health": 1.0, "camera_fps": 30.0}
+            dashboard._trend_history["time"].extend([1.0, 2.0])
+            dashboard._trend_history["cpu"].extend([73.9, 81.4])
+            for key in dashboard._trend_history:
+                if key not in {"time", "cpu"}:
+                    dashboard._trend_history[key].extend([None, None])
+
+            page.runner.finish_for_review()
+            self.assertTrue(process_until(lambda: item.runtime_status == RuntimeStatus.NEEDS_REVIEW))
+            self.assertTrue((attempt_dir / "final_metrics.json").is_file())
+            snapshot = json.loads((attempt_dir / "final_metrics.json").read_text())
+            self.assertGreaterEqual(snapshot["elapsed_sec"], 0)
+            self.assertEqual(snapshot["system"]["cpu"]["current_percent"], 81.4)
+            self.assertEqual(snapshot["system"]["thermal"]["cpu_thermal"], 63.5)
+            self.assertEqual(snapshot["trends"]["cpu"][-2:], [73.9, 81.4])
+            result = json.loads((attempt_dir / "result.json").read_text())
+            self.assertEqual(result["status"], "NEEDS_REVIEW")
+            self.assertIsNone(result["review_status"])
+            self.assertEqual(result["final_metrics_file"], "final_metrics.json")
+            self.assertIsNone(page.runner.evidence_manager)
+            self.assertIsNone(dashboard._active_manager)
+            self.assertIsNotNone(dashboard._active_definition)
+            self.assertEqual(dashboard.execution_status.text(), "NEEDS REVIEW")
+            self.assertEqual(dashboard.metric_values["performance"]["cpu"].text(), "81.4 %")
+            self.assertFalse(dashboard.pass_button.isHidden())
+            self.assertTrue(dashboard.continue_button.isHidden())
+
+            dashboard.back_to_list_button.click()
+            self.assertEqual(dashboard.view_stack.currentIndex(), 0)
+            dashboard.show_result(item, load_result_snapshot(attempt_dir))
+            self.assertEqual(dashboard.metric_values["performance"]["cpu"].text(), "81.4 %")
+            self.assertEqual(list(dashboard._trend_history["cpu"])[-2:], [73.9, 81.4])
+            self.assertEqual(dashboard.live_metrics_title.text(), "Final Runtime Metrics")
+
+            attempts_before = list(attempt_dir.parent.glob("attempt_*"))
+            page._review_result(RuntimeStatus.FAIL, "CPU exceeded target tolerance.")
+            reviewed = json.loads((attempt_dir / "result.json").read_text())
+            self.assertEqual(reviewed["status"], "FAIL")
+            self.assertEqual(reviewed["review_comment"], "CPU exceeded target tolerance.")
+            self.assertEqual(list(attempt_dir.parent.glob("attempt_*")), attempts_before)
+            self.assertIsNone(page.runner.evidence_manager)
+            self.assertEqual(dashboard.execution_status.text(), "FAIL")
+            self.assertIn("CPU exceeded target tolerance.", dashboard.review_summary_label.text())
+            self.assertEqual(dashboard.metric_values["performance"]["cpu"].text(), "81.4 %")
+            page.close()
+
+    def test_reopen_legacy_and_non_cpu_results_without_live_manager(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = SystemStressPage(evidence_root=directory)
+            item = definition("ST-MEMORY-RESULT")
+            item.group = "Memory Stress"
+            session = page.session_manager
+            session.create_session("VD")
+            paths = session.create_attempt(item)
+            session.write_result(paths, {"test_id": item.test_id, "attempt": 1, "status": "STOPPED", "elapsed_sec": 12})
+            # A legacy result has no final_metrics.json and must still render.
+            page.vd_page.show_result(item, load_result_snapshot(paths.attempt_dir))
+            self.assertEqual(page.vd_page.execution_status.text(), "STOPPED")
+            self.assertEqual(page.vd_page.active_summary_values["elapsed"].text(), "00:00:12")
+            self.assertIsNone(page.vd_page._active_manager)
+
+            persist_final_metrics(
+                paths.attempt_dir,
+                {
+                    "captured_at": "2026-09-23T00:00:00+00:00",
+                    "elapsed_sec": 12,
+                    "test": {"test_id": item.test_id},
+                    "system": {
+                        "memory": {
+                            "total_bytes": 8000,
+                            "used_bytes": 4000,
+                            "available_bytes": 4000,
+                            "usage_samples": [50.0],
+                            "used_samples": [4000],
+                            "available_samples": [4000],
+                        }
+                    },
+                    "trends": {"time": [12.0]},
+                    "warnings": ["manual warning"],
+                    "errors": [],
+                    "warning_count": 1,
+                    "error_count": 0,
+                },
+            )
+            page.vd_page.show_result(item, load_result_snapshot(paths.attempt_dir))
+            self.assertIn("50.0 %", page.vd_page.metric_values["performance"]["ram"].text())
+            self.assertEqual(page.vd_page.active_summary_values["warnings"].text(), "1")
+
+            storage = definition("ST-STORAGE-RESULT")
+            storage.group = "Storage Stress"
+            storage_paths = session.create_attempt(storage)
+            session.write_result(
+                storage_paths,
+                {"test_id": storage.test_id, "attempt": storage_paths.attempt, "status": "NEEDS_REVIEW", "elapsed_sec": 7},
+            )
+            persist_final_metrics(
+                storage_paths.attempt_dir,
+                {
+                    "captured_at": "2026-09-23T00:00:00+00:00",
+                    "elapsed_sec": 7,
+                    "test": {"test_id": storage.test_id},
+                    "system": {"future_storage_metrics": {"iops": 100}},
+                    "trends": {},
+                    "warnings": [],
+                    "errors": [],
+                },
+            )
+            page.vd_page.show_result(storage, load_result_snapshot(storage_paths.attempt_dir))
+            self.assertEqual(page.vd_page.case_domain_badge.text(), "STORAGE")
+            self.assertEqual(page.vd_page.execution_status.text(), "NEEDS REVIEW")
+            self.assertIsNone(page.vd_page._active_manager)
+            page.close()
+
+    def test_generic_execution_dashboard_prepared_for_cpu_memory_and_storage(self):
+        representatives = (
+            ("ST-CPU-005", "CPU", True),
+            ("ST-MEM-003", "MEMORY", False),
+            ("ST-STO-001", "STORAGE", False),
+        )
+        for test_id, expected_domain, has_cpu_target in representatives:
+            with self.subTest(test_id=test_id), tempfile.TemporaryDirectory() as directory:
+                page = SystemStressPage(evidence_root=directory)
+                item = page.catalog.get(test_id)
+                baseline = {
+                    "cpu": {"avg_percent": 66.1},
+                    "memory": {"used_gib": 3.0, "available_gib": 5.0},
+                }
+                self.assertTrue(
+                    page.runner.enqueue(
+                        [item],
+                        environment_status=EnvironmentStatus.READY,
+                        baseline=baseline,
+                        stress_ng_available=True,
+                    )
+                )
+                self.app.processEvents()
+
+                dashboard = page.vd_page
+                self.assertEqual(item.runtime_status, RuntimeStatus.PREPARED)
+                self.assertIn(item.test_id, dashboard.execution_title.text())
+                self.assertIn(item.test_name, dashboard.execution_title.text())
+                self.assertEqual(dashboard.execution_status.text(), "PREPARED")
+                self.assertEqual(dashboard.case_domain_badge.text(), expected_domain)
+                self.assertEqual(dashboard.active_summary_values["elapsed"].text(), "00:00:00")
+                self.assertEqual(dashboard.active_summary_values["evidence"].text(), "0 Active")
+                self.assertTrue(dashboard.continue_button.isEnabled())
+                self.assertFalse(dashboard.stop_button.isEnabled())
+                self.assertFalse(dashboard.finish_button.isEnabled())
+                self.assertIsNone(page.runner.evidence_manager)
+                self.assertIsNone(page.runner.current_paths)
+                self.assertEqual(len(dashboard._trend_history["time"]), 0)
+                self.assertEqual(dashboard.queue_table.rowCount(), 1)
+                self.assertEqual(dashboard.queue_table.item(0, 1).text(), item.test_id)
+
+                labels = [label.text() for container, label, _value in dashboard.case_monitor_fields if not container.isHidden()]
+                self.assertEqual("Target CPU" in labels, has_cpu_target)
+
+                dashboard.back_to_list_button.click()
+                self.assertEqual(dashboard.view_stack.currentIndex(), 0)
+                self.assertEqual(item.runtime_status, RuntimeStatus.PREPARED)
+                self.assertIsNone(page.runner.evidence_manager)
+                self.assertIsNone(page.runner.current_paths)
+                dashboard.view_running_button.click()
+                self.assertEqual(dashboard.view_stack.currentIndex(), 2)
+                page.close()
+
+    def test_case_presentation_context_maps_entire_catalog_and_unknown_fallback(self):
+        catalog = StressCatalog.load_vd()
+        contexts = [case_presentation_context(item) for item in catalog.definitions]
+        self.assertEqual(len(contexts), 100)
+        self.assertTrue(all(context.primary_domain for context in contexts))
+        self.assertTrue(all(context.preferred_trend in {"performance", "temperature", "power"} for context in contexts))
+        self.assertEqual(case_presentation_context(catalog.get("ST-MEM-001")).primary_domain, "MEMORY")
+        self.assertEqual(case_presentation_context(catalog.get("ST-STO-001")).primary_domain, "STORAGE")
+        self.assertEqual(case_presentation_context(catalog.get("ST-THM-001")).preferred_trend, "temperature")
+        self.assertEqual(case_presentation_context(catalog.get("ST-PWR-001")).preferred_trend, "power")
+
+        unknown = StressTestDefinition(
+            test_id="ST-UNKNOWN-001",
+            group="Unclassified",
+            test_name="Unclassified behavior",
+            source_fields={},
+        )
+        fallback = case_presentation_context(unknown)
+        self.assertEqual(fallback.primary_domain, "GENERAL")
+        self.assertEqual(fallback.preferred_trend, "performance")
+
+    def test_prepared_selection_can_be_replaced_before_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "workload_started"
+            evidence = (EvidenceDefinition("workload", "Workload", "log", "workload", "synthetic"),)
+            first = definition(
+                "ST-REPLACE-001",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"),
+            )
+            second = definition(
+                "ST-REPLACE-002",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"),
+            )
+            runner = StressTestRunner(StressSessionManager(directory))
+
+            self.assertTrue(runner.enqueue([first], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(first.runtime_status, RuntimeStatus.PREPARED)
+            self.assertFalse(runner.running)
+            self.assertIsNone(runner.current_paths)
+            self.assertIsNone(runner.evidence_manager)
+
+            self.assertTrue(runner.enqueue([second], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(first.runtime_status, RuntimeStatus.NOT_RUN)
+            self.assertEqual(second.runtime_status, RuntimeStatus.PREPARED)
+            self.assertIs(runner.current, second)
+            self.assertFalse(marker.exists())
+
+    def test_back_to_catalog_preserves_prepared_selection_and_reopens_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = SystemStressPage(evidence_root=directory)
+            page.pretest_page.result = ReadinessResult(
+                EnvironmentStatus.READY,
+                [],
+                [],
+                {},
+                "now",
+                {"memory": {"used_gib": 2.0, "available_gib": 6.0}},
+            )
+            item = page.catalog.get("ST-MEM-001")
+            replacement = page.catalog.get("ST-MEM-002")
+            page.run_selected([item])
+            dashboard = page.vd_page
+            self.assertEqual(dashboard.view_running_button.text(), "VIEW PREPARED TEST")
+
+            dashboard.back_to_list_button.click()
+            self.assertEqual(dashboard.view_stack.currentIndex(), 0)
+            self.assertEqual(item.runtime_status, RuntimeStatus.PREPARED)
+            self.assertIs(page.runner.current, item)
+            self.assertIsNone(page.runner.current_paths)
+
+            dashboard.view_running_button.click()
+            self.assertEqual(dashboard.view_stack.currentIndex(), 2)
+            self.assertIn(item.test_id, dashboard.execution_title.text())
+
+            dashboard.back_to_list_button.click()
+            replacement_row = next(
+                row
+                for row in range(dashboard.table.rowCount())
+                if dashboard.table.item(row, 1).text() == replacement.test_id
+            )
+            dashboard.table.item(replacement_row, 0).setCheckState(Qt.CheckState.Checked)
+            self.assertTrue(dashboard.run_button.isEnabled())
+            dashboard.run_button.click()
+            self.app.processEvents()
+            self.assertEqual(item.runtime_status, RuntimeStatus.NOT_RUN)
+            self.assertEqual(replacement.runtime_status, RuntimeStatus.PREPARED)
+            self.assertIn(replacement.test_id, dashboard.execution_title.text())
+            page.close()
+
+    def test_running_selection_blocks_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = (EvidenceDefinition("workload", "Workload", "log", "workload", "synthetic"),)
+            first = definition(
+                "ST-RUNNING-001",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", "import time; time.sleep(30)"),
+            )
+            second = definition("ST-RUNNING-002", evidence=evidence)
+            runner = StressTestRunner(StressSessionManager(directory))
+            errors = []
+            runner.error.connect(errors.append)
+            self.assertTrue(runner.enqueue([first], environment_status=EnvironmentStatus.READY))
+            self.assertTrue(runner.start_current())
+            self.assertTrue(process_until(lambda: runner.evidence_manager.records[0].status == CollectorStatus.RUNNING))
+            paths = runner.current_paths
+
+            self.assertFalse(runner.enqueue([second], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(first.runtime_status, RuntimeStatus.RUNNING)
+            self.assertEqual(second.runtime_status, RuntimeStatus.NOT_RUN)
+            self.assertIs(runner.current, first)
+            self.assertIs(runner.current_paths, paths)
+            self.assertEqual(
+                errors[-1],
+                "A test is currently running. Stop or finish it before selecting another test.",
+            )
+            runner.stop()
+            self.assertTrue(process_until(lambda: first.runtime_status == RuntimeStatus.STOPPED))
+
+    def test_prepared_switch_does_not_construct_collectors_or_start_workload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "orphan_process_marker"
+            evidence = (EvidenceDefinition("workload", "Workload", "log", "workload", "synthetic"),)
+            first = definition(
+                "ST-NO-COLLECTOR-001",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"),
+            )
+            second = definition("ST-NO-COLLECTOR-002", evidence=evidence)
+            runner = StressTestRunner(StressSessionManager(directory))
+            with patch("desktop_app.stress.runner.EvidenceManager") as manager_factory:
+                self.assertTrue(runner.enqueue([first], environment_status=EnvironmentStatus.READY))
+                self.assertTrue(runner.enqueue([second], environment_status=EnvironmentStatus.READY))
+                manager_factory.assert_not_called()
+            self.assertIsNone(runner.evidence_manager)
+            self.assertIsNone(runner.current_paths)
+            self.assertFalse(marker.exists())
+
+    def test_replaced_prepared_selection_writes_no_stopped_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = StressSessionManager(directory)
+            runner = StressTestRunner(session)
+            first = definition("ST-NO-RESULT-001")
+            second = definition("ST-NO-RESULT-002")
+            self.assertTrue(runner.enqueue([first], environment_status=EnvironmentStatus.READY))
+            self.assertTrue(runner.enqueue([second], environment_status=EnvironmentStatus.READY))
+
+            first_dir = session.session_dir / "tests" / first.test_id
+            self.assertFalse(first_dir.exists())
+            self.assertEqual(list(session.session_dir.rglob("result.json")), [])
+            self.assertEqual(first.runtime_status, RuntimeStatus.NOT_RUN)
+
+    def test_replaced_prepared_selection_creates_no_history_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = StressTestRunner(StressSessionManager(directory))
+            first = definition("ST-NO-HISTORY-001")
+            second = definition("ST-NO-HISTORY-002")
+            self.assertTrue(runner.enqueue([first], environment_status=EnvironmentStatus.READY))
+            self.assertTrue(runner.enqueue([second], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(scan_history(directory, first.test_id), [])
+
+    def test_replacing_prepared_multi_selection_resets_entire_old_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = StressTestRunner(StressSessionManager(directory))
+            first = definition("ST-MULTI-001")
+            second = definition("ST-MULTI-002")
+            third = definition("ST-MULTI-003")
+            fourth = definition("ST-MULTI-004")
+            self.assertTrue(runner.enqueue([first, second], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(first.runtime_status, RuntimeStatus.PREPARED)
+            self.assertEqual(second.runtime_status, RuntimeStatus.WAITING)
+
+            self.assertTrue(runner.enqueue([third, fourth], environment_status=EnvironmentStatus.READY))
+            self.assertEqual(first.runtime_status, RuntimeStatus.NOT_RUN)
+            self.assertEqual(second.runtime_status, RuntimeStatus.NOT_RUN)
+            self.assertEqual(third.runtime_status, RuntimeStatus.PREPARED)
+            self.assertEqual(fourth.runtime_status, RuntimeStatus.WAITING)
+            self.assertIs(runner.current, third)
+            self.assertEqual(runner.queue, [fourth])
+            self.assertIsNone(runner.current_paths)
+            self.assertIsNone(runner.evidence_manager)
 
     def test_37_dummy_collectors_run_concurrently(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -880,19 +1324,74 @@ class QtStressTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manager = StressSessionManager(directory)
             runner = StressTestRunner(manager)
-            evidence = (EvidenceDefinition("workload", "Workload", "log", "workload", "synthetic"),)
-            first = definition("ST-DUMMY-001", evidence=evidence, program=sys.executable, arguments=("-c", "print('one')"))
-            second = definition("ST-DUMMY-002", evidence=evidence, program=sys.executable, arguments=("-c", "print('two')"))
-            confirmations = []
-            runner.confirmation_required.connect(lambda item, _paths: confirmations.append(item.test_id))
-            self.assertTrue(runner.enqueue([first, second], environment_status=EnvironmentStatus.READY))
-            self.assertEqual(confirmations, [first.test_id])
-            self.assertEqual(second.runtime_status, RuntimeStatus.WAITING)
-            runner.start_current()
-            self.assertTrue(process_until(lambda: len(confirmations) == 2))
-            self.assertEqual(first.runtime_status, RuntimeStatus.NEEDS_REVIEW)
-            self.assertEqual(second.runtime_status, RuntimeStatus.STARTING)
+            evidence = (
+                EvidenceDefinition(
+                    "workload",
+                    "Workload",
+                    "log",
+                    "workload",
+                    "synthetic",
+                ),
+            )
+
+            first = definition(
+                "ST-DUMMY-001",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", "print('one')"),
+            )
+            second = definition(
+                "ST-DUMMY-002",
+                evidence=evidence,
+                program=sys.executable,
+                arguments=("-c", "print('two')"),
+            )
+
+            prepared = []
+
+            runner.test_prepared.connect(
+                lambda item, _manager:
+                prepared.append(item.test_id)
+            )
+
+            self.assertTrue(
+                runner.enqueue(
+                    [first, second],
+                    environment_status=EnvironmentStatus.READY,
+                )
+            )
+
+            # SELECT prepares only the first case.
+            self.assertEqual(prepared, [first.test_id])
+            self.assertEqual(
+                first.runtime_status,
+                RuntimeStatus.PREPARED,
+            )
+            self.assertEqual(
+                second.runtime_status,
+                RuntimeStatus.WAITING,
+            )
+
+            # START TEST is still required.
+            self.assertTrue(runner.start_current())
+
+            # First workload completes and the next case becomes PREPARED,
+            # but the second case must not auto-start.
+            self.assertTrue(
+                process_until(lambda: len(prepared) == 2)
+            )
+
+            self.assertEqual(
+                first.runtime_status,
+                RuntimeStatus.NEEDS_REVIEW,
+            )
+            self.assertEqual(
+                second.runtime_status,
+                RuntimeStatus.PREPARED,
+            )
+
             self.assertIsNone(runner.evidence_manager)
+            self.assertIsNone(runner.current_paths)
 
     def test_runner_stop_writes_stopped_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -908,6 +1407,9 @@ class QtStressTests(unittest.TestCase):
             self.assertTrue(process_until(lambda: item.runtime_status == RuntimeStatus.STOPPED))
             result = json.loads((attempt_dir / "result.json").read_text())
             self.assertEqual(result["status"], "STOPPED")
+            snapshot = json.loads((attempt_dir / "final_metrics.json").read_text())
+            self.assertIn("elapsed_sec", snapshot)
+            self.assertEqual(snapshot["test"]["test_id"], item.test_id)
 
     def test_47_48_vr_and_vmo_placeholders(self):
         with tempfile.TemporaryDirectory() as directory:
