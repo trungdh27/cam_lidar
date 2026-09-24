@@ -81,6 +81,13 @@ class SSHManager:
             raise RuntimeError("SSH connection is not established")
         return await self._connection.create_process(command)
 
+    async def download_file(self, remote_path: str, local_path: str) -> None:
+        """Download one remote file over the current SSH connection's SFTP channel."""
+        if self._connection is None:
+            raise RuntimeError("SSH connection is not established")
+        async with self._connection.start_sftp_client() as sftp:
+            await sftp.get(remote_path, local_path)
+
     async def run_sudo(
         self,
         command: str,

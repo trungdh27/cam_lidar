@@ -287,6 +287,56 @@ def parse_sink_volume(output: str) -> int | None:
     return max(valid) if valid else None
 
 
+def parse_sink_channel_state(volume_output: str, sink_output: str = "") -> dict[str, object]:
+    """Parse per-channel PulseAudio volume, mute-independent balance and map.
+
+    ``pactl get-sink-volume`` is deliberately kept separate from the existing
+    aggregate :func:`parse_sink_volume` helper because channel validation must
+    not mistake the highest channel level for both channels.
+    """
+    channel_volumes: dict[str, int] = {}
+    for channel in ("front-left", "front-right"):
+        match = re.search(
+            rf"{re.escape(channel)}\s*:\s*.*?/\s*(\d{{1,3}})%",
+            volume_output,
+            re.IGNORECASE,
+        )
+        if match:
+            channel_volumes[channel] = int(match.group(1))
+    if not channel_volumes:
+        # Some PulseAudio-compatible implementations print percentages without
+        # the channel labels. Keep this fallback diagnostic-only.
+        values = [int(value) for value in re.findall(r"(?<!\d)(\d{1,3})\s*%", volume_output)]
+        valid = [value for value in values if 0 <= value <= 100]
+        if len(valid) >= 2:
+            channel_volumes = {"front-left": valid[0], "front-right": valid[1]}
+
+    map_match = re.search(
+        r"(?:channel\s+map|channel_map)\s*:\s*([^\n]+)",
+        sink_output,
+        re.IGNORECASE,
+    )
+    channel_map = tuple(
+        item.strip().casefold()
+        for item in re.split(r"[, ]+", map_match.group(1))
+        if item.strip()
+    ) if map_match else ()
+    balance_match = re.search(r"\bbalance\s*[:=]\s*(-?\d+(?:\.\d+)?)", volume_output, re.IGNORECASE)
+    balance = float(balance_match.group(1)) if balance_match else None
+    return {
+        "left_volume_percent": channel_volumes.get("front-left"),
+        "right_volume_percent": channel_volumes.get("front-right"),
+        "channel_volumes": channel_volumes,
+        "balance": balance,
+        "channel_map": channel_map,
+        "stereo": (
+            len(channel_volumes) == 2
+            and "front-left" in channel_map
+            and "front-right" in channel_map
+        ),
+    }
+
+
 def parse_sink_mute(output: str) -> bool | None:
     """Parse PulseAudio's `Mute: yes|no` response."""
     match = re.search(

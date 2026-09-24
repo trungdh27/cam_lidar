@@ -57,6 +57,45 @@ QFrame#Card {
     border-radius: 9px;
 }
 
+QFrame#SectionFrame {
+    background: #FFFFFF;
+    border: 1px solid #D8E0EB;
+    border-radius: 9px;
+}
+
+QFrame#SectionFrame[semantic="primary"] {
+    border: 2px solid #4C8DFF;
+}
+
+QFrame#SectionFrame[semantic="neutral"] {
+    border: 1px solid #D8E0EB;
+}
+
+QFrame#SectionFrame[semantic="active"] {
+    border: 2px solid #84ADFF;
+}
+
+QFrame#SectionFrame[semantic="pass"] {
+    border: 2px solid #56B870;
+}
+
+QFrame#SectionFrame[semantic="warning"] {
+    border: 2px solid #E7A11A;
+}
+
+QFrame#SectionFrame[semantic="error"] {
+    border: 2px solid #D92D20;
+}
+
+QFrame#SectionFrame[semantic="console"] {
+    background: #0E1117;
+    border: 2px solid #344054;
+}
+
+QFrame#SectionFrame[semantic="console"] QLabel {
+    color: #E6EDF3;
+}
+
 QFrame#Card[accent="blue"] {
     border-top: 3px solid #84ADFF;
 }
@@ -567,6 +606,15 @@ QTextEdit#LiveLog, QPlainTextEdit#LiveLog {
     font-family: "DejaVu Sans Mono", monospace;
     font-size: 12px;
     padding: 6px;
+}
+
+QPlainTextEdit#AudioExecutionLog {
+    background: #0E1117;
+    color: #E6EDF3;
+    border: 1px solid #344054;
+    border-radius: 6px;
+    padding: 8px;
+    selection-background-color: #264F78;
 }
 
 QDialog {

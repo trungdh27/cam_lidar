@@ -55,8 +55,8 @@ class AudioPage(QWidget):
         super().__init__(parent)
         self.jetson_state = jetson_state
         self.jetson_service = jetson_service
-        self.audio_manager = AudioManager(jetson_service, self)
         self.evidence_manager = AudioEvidenceManager()
+        self.audio_manager = AudioManager(jetson_service, self, self.evidence_manager)
         self._last_connected: bool | None = None
         self._has_default_sink = False
         self._last_confirmed_volume: int | None = None
@@ -122,6 +122,8 @@ class AudioPage(QWidget):
         self.audio_manager.speaker_test_failed.connect(self._on_speaker_test_failed)
         self.audio_manager.speaker_test_output.connect(self._on_speaker_test_output)
         self.audio_manager.speaker_test_disconnected.connect(self._on_speaker_test_disconnected)
+        self.audio_manager.automation_action_started.connect(lambda _action: self._update_session_ui())
+        self.audio_manager.automation_action_finished.connect(lambda _result: self._update_session_ui())
         self._on_jetson_state_changed(self.jetson_state)
 
     def _build_ui(self) -> None:
@@ -205,6 +207,7 @@ class AudioPage(QWidget):
             self.audio_manager,
             self.jetson_service,
             source_provider=lambda: self._current_default_source,
+            evidence_manager=self.evidence_manager,
             parent=self.audio_tabs,
         )
         self.audio_tabs.addTab(self.automated_page, "Automated Test")
@@ -481,7 +484,10 @@ class AudioPage(QWidget):
         self.log_text.setMinimumHeight(140)
         self.log_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         log_card.body_layout.addWidget(self.log_text)
+        self.manual_log_card = log_card
         root.addWidget(log_card)
+        self.audio_tabs.currentChanged.connect(self._on_audio_tab_changed)
+        self._on_audio_tab_changed(self.audio_tabs.currentIndex())
         self._set_recording_controls_enabled()
         self._update_session_ui()
 
@@ -620,6 +626,11 @@ class AudioPage(QWidget):
 
     def clear_log(self) -> None:
         self.log_text.clear()
+
+    def _on_audio_tab_changed(self, index: int) -> None:
+        """Keep the manual operational log out of the Automated Test view."""
+        if hasattr(self, "manual_log_card"):
+            self.manual_log_card.setVisible(index == 0)
 
     @staticmethod
     def _key_label(text: str) -> QLabel:

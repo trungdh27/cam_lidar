@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 import shlex
+from pathlib import Path
 from pathlib import PurePosixPath
 
 from PySide6.QtCore import QObject, Signal
@@ -46,12 +47,21 @@ from desktop_app.audio.speaker_test_prompts import (
     parse_remote_prompt_preparation,
 )
 from desktop_app.audio.audio_actions import analyze_remote_wav, run_audio_precheck
+from desktop_app.audio.audio_evidence import AudioEvidenceManager
 from desktop_app.audio.audio_automation import (
     AudioActionResult,
     AudioExecutionLogger,
     make_action_result,
 )
 from desktop_app.audio.respeaker_mixer import ensure_respeaker_playback_mixer_ready
+from desktop_app.audio.speaker_channel import (
+    SpeakerChannel,
+    SpeakerPhysicalVerification,
+    SpeakerChannelPrecheck,
+    build_speaker_channel_command,
+    overall_speaker_channel_result,
+    prepare_speaker_channel_test as prepare_speaker_channel_action,
+)
 
 
 DISCOVERY_COMMANDS = (
@@ -122,8 +132,9 @@ class AudioManager(QObject):
     automation_action_failed = Signal(object)
     automation_state_changed = Signal(str)
     automation_log_event = Signal(object)
+    speaker_channel_updated = Signal(object)
 
-    def __init__(self, jetson_service, parent=None):
+    def __init__(self, jetson_service, parent=None, evidence_manager: AudioEvidenceManager | None = None):
         super().__init__(parent)
         self.jetson_service = jetson_service
         self._request_id: str | None = None
@@ -145,17 +156,30 @@ class AudioManager(QObject):
         self._speaker_test_request_id: str | None = None
         self._speaker_test_active = False
         self._speaker_test_preparation: AudioSpeakerTestPreparation | None = None
+        self._speaker_channel_request_id: str | None = None
+        self._speaker_channel_active = False
+        self._speaker_channel_stop_requested = False
+        self._speaker_channel_started_at: datetime | None = None
+        self._speaker_channel_precheck: SpeakerChannelPrecheck | None = None
+        self._speaker_channel_output: list[str] = []
+        self._speaker_channel_channel: SpeakerChannel | None = None
+        self._speaker_channel_frequency_hz = 500
+        self._speaker_channel_duration_sec = 3
+        self._speaker_channel_results: dict[str, dict[str, object]] = {}
         self.automation_logger = AudioExecutionLogger()
         self._automation_capture_active = False
         self._automation_capture_started_at: datetime | None = None
         self._automation_capture_config: AudioRecordingConfig | None = None
         self._automation_capture_stop_requested = False
         self._automation_capture_return_code: int | None = None
+        self._automation_capture_local_path: Path | None = None
+        self._automation_capture_archive: dict[str, object] | None = None
         self._automation_playback_active = False
         self._automation_playback_started_at: datetime | None = None
         self._automation_playback_path: str | None = None
         self._automation_playback_stop_requested = False
         self._automation_analysis_path: str | None = None
+        self.evidence_manager = evidence_manager
         self._automation_duplex_active = False
         self._automation_duplex_started_at: datetime | None = None
         self._automation_duplex_capture_id: str | None = None
@@ -180,7 +204,12 @@ class AudioManager(QObject):
 
     @property
     def busy(self) -> bool:
-        return self._request_id is not None or self._speaker_test_active or self._automation_duplex_active
+        return (
+            self._request_id is not None
+            or self._speaker_test_active
+            or self._speaker_channel_active
+            or self._automation_duplex_active
+        )
 
     @property
     def playback_active(self) -> bool:
@@ -238,6 +267,43 @@ class AudioManager(QObject):
         return self._speaker_test_preparation
 
     @property
+    def speaker_channel_active(self) -> bool:
+        return self._speaker_channel_active
+
+    @property
+    def speaker_channel_results(self) -> dict[str, dict[str, object]]:
+        return {key: dict(value) for key, value in self._speaker_channel_results.items()}
+
+    def speaker_channel_summary(self) -> dict[str, object]:
+        left = self._speaker_channel_results.get("LEFT", {})
+        right = self._speaker_channel_results.get("RIGHT", {})
+        return {
+            "started_at": self._speaker_channel_started_at.isoformat(timespec="milliseconds") if self._speaker_channel_started_at else None,
+            "output": "reSpeaker XVF3800",
+            "left": {
+                "execution": left.get("execution_status", "NOT RUN"),
+                "command": left.get("command"),
+                "return_code": left.get("return_code"),
+                "pcm1_percent": left.get("pcm1_percent"),
+                "physical_verification": left.get("physical_verification", SpeakerPhysicalVerification.NOT_VERIFIED.value),
+            },
+            "right": {
+                "execution": right.get("execution_status", "NOT RUN"),
+                "command": right.get("command"),
+                "return_code": right.get("return_code"),
+                "pcm1_percent": right.get("pcm1_percent"),
+                "physical_verification": right.get("physical_verification", SpeakerPhysicalVerification.NOT_VERIFIED.value),
+            },
+            "pulse_state": left.get("pulse_state") or right.get("pulse_state") or {},
+            "overall": overall_speaker_channel_result(
+                left.get("execution_status", "NOT RUN"),
+                left.get("physical_verification", SpeakerPhysicalVerification.NOT_VERIFIED.value),
+                right.get("execution_status", "NOT RUN"),
+                right.get("physical_verification", SpeakerPhysicalVerification.NOT_VERIFIED.value),
+            ),
+        }
+
+    @property
     def recording_path(self) -> str | None:
         return self._recording_path
 
@@ -253,7 +319,18 @@ class AudioManager(QObject):
         details: dict[str, object] | None = None,
     ) -> None:
         event = self.automation_logger.log(module, level, message, details)
+        if self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_execution_event(event)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                # Evidence persistence must not break the live Audio action or
+                # prevent the in-memory/UI execution log from receiving the event.
+                pass
         self.automation_log_event.emit(event)
+
+    @staticmethod
+    def _format_dbfs(value: object) -> str:
+        return "-∞ dBFS" if value is None else f"{float(value):.2f} dBFS"
 
     def _automation_start(self, action: str, module: str, message: str) -> None:
         self.automation_action_started.emit(action)
@@ -262,6 +339,19 @@ class AudioManager(QObject):
 
     def _publish_automation_result(self, result: AudioActionResult) -> None:
         self.automation_logger.record_result(result)
+        if result.action == "audio_precheck" and self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_baseline(result.data)
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._automation_log("EVIDENCE", "ERROR", f"Baseline evidence save failed: {exc}")
+        elif result.action == "analyze_wav" and result.success and self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_analysis(
+                    result.data,
+                    str(result.data.get("path") or result.data.get("source_path") or ""),
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._automation_log("EVIDENCE", "ERROR", f"Analysis evidence save failed: {exc}")
         if result.action == "audio_precheck":
             module_names = {
                 "usb": "USB",
@@ -302,17 +392,47 @@ class AudioManager(QObject):
                         self._automation_log("MIXER", "WARN", text.split("] ", 1)[-1])
                     elif "Initializing" in text or "Enabled" in text:
                         self._automation_log("MIXER", "ACTION", text.split("] ", 1)[-1])
+            self._automation_log(
+                "BASELINE",
+                "PASS" if result.success else "FAIL",
+                "Evidence saved" if result.success else "Baseline completed with unavailable components",
+            )
         else:
             module = {
                 "analyze_wav": "ANALYSIS",
                 "capture": "CAPTURE",
                 "playback": "PLAYBACK",
                 "full_duplex": "FULL_DUPLEX",
+                "speaker_channel_test": "CHANNEL",
             }.get(result.action, "SYSTEM")
             level = result.state if result.state in {"PASS", "FAIL", "STOPPED", "BLOCKED"} else "INFO"
             self._automation_log(module, level, result.message, result.data)
+            if result.action == "speaker_channel_test":
+                channel = result.data.get("channel", "?")
+                self._automation_log(
+                    "CHANNEL",
+                    "PASS" if result.success else result.state,
+                    f"{channel} command completed rc={result.return_code}"
+                    if result.success
+                    else f"{channel} command did not complete successfully",
+                )
             if result.requires_manual_verification:
                 self._automation_log(module, "INFO", "Physical audio confirmation: MANUAL VERIFY")
+            if result.action == "analyze_wav" and result.success:
+                data = result.data
+                self._automation_log("ANALYSIS", "INFO", f"Duration={data.get('duration_sec', 0):.3f} s")
+                for channel in data.get("channels_data", []):
+                    self._automation_log(
+                        "ANALYSIS",
+                        "INFO",
+                        f"CH{channel.get('channel')} RMS={self._format_dbfs(channel.get('rms_dbfs'))}",
+                    )
+                self._automation_log(
+                    "ANALYSIS",
+                    "INFO",
+                    f"Channel delta={self._format_dbfs(data.get('channel_delta_db'))}; "
+                    f"Clipping={'YES' if data.get('clipping_detected') else 'NO'}",
+                )
         self.automation_state_changed.emit(result.state)
         self.automation_action_finished.emit(result)
         if not result.success:
@@ -345,7 +465,7 @@ class AudioManager(QObject):
             return self._blocked_automation_action("audio_precheck", "Jetson is not connected")
         self._request_id = request_id
         self._request_kind = "automation_precheck"
-        self._automation_start("audio_precheck", "SYSTEM", "Audio pre-check started")
+        self._automation_start("audio_precheck", "BASELINE", "Collecting Audio configuration")
         return True
 
     def capture_audio(self, config: AudioRecordingConfig) -> bool:
@@ -359,6 +479,14 @@ class AudioManager(QObject):
         self._automation_capture_config = config
         self._automation_capture_stop_requested = False
         self._automation_capture_return_code = None
+        self._automation_capture_archive = None
+        self._automation_capture_local_path = None
+        if self.evidence_manager is not None and self.evidence_manager.is_active:
+            self._automation_capture_local_path = (
+                self.evidence_manager.capture_path / Path(config.output_path).name
+                if self.evidence_manager.capture_path
+                else None
+            )
         self._automation_start(
             "capture",
             "CAPTURE",
@@ -382,6 +510,22 @@ class AudioManager(QObject):
         self._automation_analysis_path = recording.path
 
         async def operation(ssh):
+            local_path = self.evidence_manager.last_capture_path if self.evidence_manager else None
+            if local_path is not None and local_path.is_file():
+                from desktop_app.audio.audio_automation import analyze_wav
+
+                local_result = analyze_wav(local_path)
+                if local_result.success:
+                    data = dict(local_result.data)
+                    data.update(
+                        {
+                            "path": recording.path,
+                            "source_path": recording.path,
+                            "local_path": str(local_path),
+                        }
+                    )
+                    return replace(local_result, data=data)
+                return local_result
             return await analyze_remote_wav(ssh, recording.path)
 
         request_id = self.jetson_service.submit_operation("audio_automation_analyze_wav", operation)
@@ -488,6 +632,8 @@ class AudioManager(QObject):
     def stop_automation(self) -> bool:
         """Stop only Audio processes tracked by the automation manager."""
         stopped = False
+        if self._speaker_channel_active:
+            stopped = self.stop_speaker_channel_test() or stopped
         if self._automation_duplex_active:
             self._automation_duplex_stop_requested = True
             self._automation_log("FULL_DUPLEX", "STOP", "User requested stop")
@@ -532,6 +678,7 @@ class AudioManager(QObject):
         message: str,
         verification: AudioRecordingVerification | None = None,
         state: str | None = None,
+        archive: dict[str, object] | None = None,
     ) -> None:
         if not self._automation_capture_active:
             return
@@ -543,7 +690,25 @@ class AudioManager(QObject):
             "file_size": verification.size_bytes if verification else None,
             "duration_requested": config.duration_seconds if config else None,
             "valid_wav": verification.valid if verification else False,
+            "evidence_archive": archive or self._automation_capture_archive,
         }
+        archive_data = archive or self._automation_capture_archive
+        if archive_data and archive_data.get("local_path"):
+            data["local_path"] = archive_data["local_path"]
+        if success and verification and self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_capture(
+                    remote_path=verification.path,
+                    local_path=(archive_data or {}).get("local_path") if archive_data else None,
+                    size_bytes=verification.size_bytes,
+                    status="SUCCESS" if archive_data and not archive_data.get("error") else "FAILED",
+                    error=(archive_data or {}).get("error") if archive_data else "Evidence archive was not created.",
+                )
+                if archive_data and archive_data.get("error"):
+                    message = "Capture completed; evidence archive failed"
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._automation_log("EVIDENCE", "ERROR", f"Capture evidence save failed: {exc}")
+                message = "Capture completed; evidence record failed"
         if self._automation_capture_stop_requested:
             state = "STOPPED"
             success = False
@@ -566,7 +731,38 @@ class AudioManager(QObject):
         self._automation_capture_config = None
         self._automation_capture_stop_requested = False
         self._automation_capture_return_code = None
+        self._automation_capture_local_path = None
+        self._automation_capture_archive = None
         self._publish_automation_result(result)
+
+    def _start_capture_archive(self, verification: AudioRecordingVerification) -> bool:
+        """Copy a successful remote capture into the active local evidence session."""
+        local_path = self._automation_capture_local_path
+        if self.evidence_manager is None or not self.evidence_manager.is_active or local_path is None:
+            return False
+        try:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._automation_log("EVIDENCE", "WARN", f"Capture archive directory unavailable: {exc}")
+            return False
+        remote_path = verification.path
+
+        async def operation(ssh):
+            if not hasattr(ssh, "download_file"):
+                raise RuntimeError("SFTP download is unavailable on the shared SSH connection.")
+            await ssh.download_file(remote_path, str(local_path))
+            size = local_path.stat().st_size
+            if size <= 44:
+                raise RuntimeError("Downloaded capture is empty or not a valid WAV file.")
+            return {"remote_path": remote_path, "local_path": str(local_path), "size_bytes": size}
+
+        request_id = self.jetson_service.submit_operation("audio_capture_evidence", operation)
+        if request_id is None:
+            return False
+        self._request_id = request_id
+        self._request_kind = "automation_capture_archive"
+        self._automation_log("EVIDENCE", "START", f"Archiving capture {local_path.name}")
+        return True
 
     def _finish_automation_playback(
         self,
@@ -988,6 +1184,207 @@ class AudioManager(QObject):
         self._stop_requested = False
         return path
 
+    def run_speaker_channel_test(
+        self,
+        channel: str | SpeakerChannel,
+        *,
+        frequency_hz: int = 500,
+        duration_sec: int = 3,
+    ) -> bool:
+        """Run one reusable semi-automated LEFT/RIGHT channel action."""
+        try:
+            selected = SpeakerChannel.parse(channel)
+            command = build_speaker_channel_command(selected, frequency_hz=frequency_hz)
+        except ValueError as exc:
+            return self._blocked_automation_action("speaker_channel_test", str(exc))
+        if self._speaker_channel_active:
+            return self._blocked_automation_action("speaker_channel_test", "A speaker channel test is already active")
+        if self.busy or self.recording_busy or self.playback_active or self._speaker_test_active:
+            return self._blocked_automation_action("speaker_channel_test", "Another Audio action is active")
+        if not self.jetson_service.is_connected:
+            return self._blocked_automation_action("speaker_channel_test", "Jetson is not connected")
+
+        self._speaker_channel_active = True
+        self._speaker_channel_stop_requested = False
+        self._speaker_channel_started_at = datetime.now()
+        self._speaker_channel_precheck = None
+        self._speaker_channel_output = []
+        self._speaker_channel_channel = selected
+        self._speaker_channel_frequency_hz = frequency_hz
+        self._speaker_channel_duration_sec = duration_sec
+        self._automation_start(
+            "speaker_channel_test",
+            "CHANNEL",
+            f"Speaker {selected.value} test",
+        )
+
+        async def operation(ssh):
+            return await prepare_speaker_channel_action(
+                ssh,
+                selected,
+                frequency_hz=frequency_hz,
+                sample_rate_hz=16000,
+            )
+
+        request_id = self.jetson_service.submit_operation("audio_speaker_channel_preflight", operation)
+        if request_id is None:
+            self._finish_speaker_channel(False, "Jetson is not connected", state="BLOCKED")
+            return False
+        self._request_id = request_id
+        self._request_kind = "speaker_channel_preflight"
+        return True
+
+    def set_speaker_physical_verification(
+        self,
+        channel: str | SpeakerChannel,
+        verification: str | SpeakerPhysicalVerification,
+    ) -> bool:
+        """Record an operator observation without conflating it with execution."""
+        selected = SpeakerChannel.parse(channel)
+        value = (
+            verification.value
+            if isinstance(verification, SpeakerPhysicalVerification)
+            else str(verification).strip().upper()
+        )
+        if value not in {item.value for item in SpeakerPhysicalVerification}:
+            raise ValueError("Unknown physical speaker verification.")
+        current = self._speaker_channel_results.get(selected.value)
+        if not current or current.get("execution_status") != "PASS":
+            return False
+        current["physical_verification"] = value
+        summary = self.speaker_channel_summary()
+        self._automation_log(
+            "VERIFY",
+            "PASS" if value == SpeakerPhysicalVerification.HEARD_CORRECT_SIDE.value else "FAIL" if value != SpeakerPhysicalVerification.NOT_VERIFIED.value else "INFO",
+            f"User confirmed physical {selected.value} speaker" if value == SpeakerPhysicalVerification.HEARD_CORRECT_SIDE.value else f"{selected.value} physical output: {value}",
+        )
+        if self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_speaker_channel_verification(
+                    selected.value, value, summary=summary
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._automation_log("EVIDENCE", "ERROR", f"Speaker result save failed: {exc}")
+        self.speaker_channel_updated.emit(summary)
+        return True
+
+    def reset_speaker_channel_results(self) -> None:
+        """Start a clean verification state for a new Audio evidence session."""
+        if self._speaker_channel_active:
+            return
+        self._speaker_channel_results.clear()
+        self._speaker_channel_started_at = None
+        self.speaker_channel_updated.emit(self.speaker_channel_summary())
+
+    def _finish_speaker_channel(
+        self,
+        success: bool,
+        message: str,
+        *,
+        return_code: int | None = None,
+        state: str | None = None,
+    ) -> None:
+        if not self._speaker_channel_active or self._speaker_channel_channel is None:
+            return
+        selected = self._speaker_channel_channel
+        precheck = self._speaker_channel_precheck
+        final_state = state or ("STOPPED" if self._speaker_channel_stop_requested else ("PASS" if success else "FAIL"))
+        execution = {
+            "execution_status": "PASS" if success else final_state,
+            "physical_verification": SpeakerPhysicalVerification.NOT_VERIFIED.value,
+            "channel": selected.value,
+            "device": precheck.device if precheck else "reSpeaker XVF3800",
+            "sample_rate_hz": precheck.sample_rate_hz if precheck else 16000,
+            "frequency_hz": self._speaker_channel_frequency_hz,
+            "requested_duration_sec": self._speaker_channel_duration_sec,
+            "command": precheck.command if precheck else build_speaker_channel_command(selected, frequency_hz=self._speaker_channel_frequency_hz),
+            "return_code": return_code,
+            "stdout": "\n".join(self._speaker_channel_output),
+            "stderr": "",
+            "sink_name": precheck.sink_name if precheck else None,
+            "sink_mute": precheck.sink_mute if precheck else None,
+            "left_volume_percent": precheck.left_volume_percent if precheck else None,
+            "right_volume_percent": precheck.right_volume_percent if precheck else None,
+            "balance": precheck.balance if precheck else None,
+            "channel_map": list(precheck.channel_map) if precheck else [],
+            "pulse_state": precheck.pulse_state if precheck else {},
+            "pcm1_percent": precheck.pcm1_percent if precheck else None,
+            "mixer": precheck.mixer if precheck else {},
+            "commands": precheck.commands if precheck else {},
+        }
+        self._speaker_channel_results[selected.value] = execution
+        summary = self.speaker_channel_summary()
+        if self.evidence_manager is not None:
+            try:
+                self.evidence_manager.record_speaker_channel_execution(
+                    selected.value, execution, summary=summary
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._automation_log("EVIDENCE", "ERROR", f"Speaker result save failed: {exc}")
+        result = make_action_result(
+            action="speaker_channel_test",
+            success=success,
+            message=message,
+            started_at=self._speaker_channel_started_at or datetime.now(),
+            data={**execution, "overall": summary["overall"]},
+            return_code=return_code,
+            state=final_state,
+            requires_manual_verification=success,
+            verification_status=("MANUAL_VERIFY" if success else "NOT_VERIFIED"),
+        )
+        self._speaker_channel_active = False
+        self._speaker_channel_stop_requested = False
+        self._speaker_channel_request_id = None
+        self._speaker_channel_precheck = None
+        self._speaker_channel_output = []
+        self._speaker_channel_channel = None
+        self._publish_automation_result(result)
+        self.speaker_channel_updated.emit(summary)
+
+    def _start_speaker_channel_process(self, precheck: SpeakerChannelPrecheck) -> None:
+        self._speaker_channel_precheck = precheck
+        self._speaker_channel_output = []
+        self._automation_log("PULSE", "INFO", f"Sink={precheck.sink_display_name}")
+        self._automation_log(
+            "PULSE",
+            "INFO",
+            f"Left={precheck.left_volume_percent}% Right={precheck.right_volume_percent}% "
+            f"Balance={precheck.balance if precheck.balance is not None else 'n/a'} "
+            f"Mute={'yes' if precheck.sink_mute else 'no'}",
+        )
+        for message in precheck.mixer.get("messages", ()):
+            text = str(message).split("] ", 1)[-1]
+            if "ERROR" in str(message):
+                self._automation_log("MIXER", "ERROR", text)
+            elif "ready" in text.casefold() or "already" in text.casefold():
+                self._automation_log("MIXER", "PASS", text)
+        self._automation_log(
+            "CHANNEL", "INFO",
+            f"speaker={precheck.channel.speaker_number} frequency={precheck.frequency_hz}Hz",
+            {"command": precheck.command},
+        )
+        request_id = self.jetson_service.start_remote_process(
+            "audio_speaker_channel", precheck.command
+        )
+        if request_id is None:
+            self._finish_speaker_channel(False, "Unable to start speaker channel test", state="FAIL")
+            return
+        self._speaker_channel_request_id = request_id
+
+    def stop_speaker_channel_test(self) -> bool:
+        if not self._speaker_channel_active:
+            return False
+        self._speaker_channel_stop_requested = True
+        if self._request_kind == "speaker_channel_preflight":
+            self._request_id = None
+            self._request_kind = None
+            self._finish_speaker_channel(False, "Speaker channel test stopped by user", state="STOPPED")
+            return True
+        if self._speaker_channel_request_id:
+            self.jetson_service.stop_remote_process(self._speaker_channel_request_id)
+            return True
+        return False
+
     def start_speaker_channel_test(self) -> bool:
         """Check speaker-test availability, then run the managed stereo test."""
         if self._speaker_test_active:
@@ -1241,7 +1638,7 @@ class AudioManager(QObject):
             self._finish_automation_capture(
                 False,
                 error,
-                state="STOPPED" if self._automation_capture_stop_requested else state.value,
+                state="STOPPED" if self._automation_capture_stop_requested else "FAIL" if state == RecordingState.FAILED else state.value,
             )
         self._clear_recording_state()
         self._set_recording_state(state)
@@ -1301,7 +1698,17 @@ class AudioManager(QObject):
             self._set_recording_state(RecordingState.COMPLETED)
             self.recording_completed.emit(result)
             if self._automation_capture_active:
-                self._finish_automation_capture(True, "Capture completed and WAV file validated", result)
+                if self._start_capture_archive(result):
+                    return
+                archive = None
+                if self.evidence_manager is not None and self.evidence_manager.is_active:
+                    archive = {"error": "Unable to start capture evidence transfer."}
+                self._finish_automation_capture(
+                    True,
+                    "Capture completed and WAV file validated",
+                    result,
+                    archive=archive,
+                )
             return
         self._set_recording_state(RecordingState.FAILED)
         self.recording_failed.emit(result.error or "Recorded WAV file verification failed.")
@@ -1437,8 +1844,23 @@ class AudioManager(QObject):
         if kind == "automation_precheck" and isinstance(result, AudioActionResult):
             self._publish_automation_result(result)
             return
+        if kind == "speaker_channel_preflight" and isinstance(result, SpeakerChannelPrecheck):
+            self._request_id = None
+            self._request_kind = None
+            self._start_speaker_channel_process(result)
+            return
         if kind == "automation_analyze_wav" and isinstance(result, AudioActionResult):
             self._publish_automation_result(result)
+            return
+        if kind == "automation_capture_archive":
+            archive = result if isinstance(result, dict) else {"error": "Invalid capture archive result."}
+            self._automation_capture_archive = archive
+            self._finish_automation_capture(
+                True,
+                "Capture completed and evidence saved",
+                self._last_recorded_file,
+                archive=archive,
+            )
             return
         if kind == "automation_full_duplex_preflight" and isinstance(result, dict):
             self._start_full_duplex_processes(result)
@@ -1541,6 +1963,21 @@ class AudioManager(QObject):
             )
             self._publish_automation_result(result)
             return
+        if kind == "speaker_channel_preflight":
+            self._request_id = None
+            self._request_kind = None
+            self._finish_speaker_channel(False, error, state="BLOCKED")
+            return
+        if kind == "automation_capture_archive":
+            self._automation_capture_archive = {"error": error}
+            self._automation_log("EVIDENCE", "WARN", f"Capture archive unavailable: {error}")
+            self._finish_automation_capture(
+                True,
+                "Capture completed; evidence archive failed",
+                self._last_recorded_file,
+                archive=self._automation_capture_archive,
+            )
+            return
         if kind == "automation_full_duplex_preflight":
             self._finish_full_duplex(False, error)
             return
@@ -1591,6 +2028,10 @@ class AudioManager(QObject):
             self.speaker_test_state_changed.emit("Running")
             self.speaker_test_started.emit()
             return
+        if request_id == self._speaker_channel_request_id and self._speaker_channel_active:
+            self._automation_log("CHANNEL", "INFO", "speaker-test process started")
+            self.automation_state_changed.emit("RUNNING")
+            return
         if request_id == self._playback_request_id and self._playback_active:
             if self._stop_requested:
                 self._set_playback_state("Stopping")
@@ -1623,6 +2064,11 @@ class AudioManager(QObject):
         if request_id == self._speaker_test_request_id and self._speaker_test_active:
             self.speaker_test_output.emit(f"ERROR: {text}" if stream == "stderr" else text)
             return
+        if request_id == self._speaker_channel_request_id and self._speaker_channel_active:
+            self._speaker_channel_output.append(f"{stream}: {text}")
+            if stream == "stderr":
+                self._automation_log("CHANNEL", "INFO", text)
+            return
         if request_id == self._playback_request_id:
             self.playback_output.emit(f"ERROR: {text}" if stream == "stderr" else text)
             return
@@ -1643,6 +2089,16 @@ class AudioManager(QObject):
                 self.speaker_test_failed.emit(
                     f"Left / Right speaker test failed with exit code {exit_code}"
                 )
+            return
+        if request_id == self._speaker_channel_request_id and self._speaker_channel_active:
+            was_stopping = self._speaker_channel_stop_requested
+            self._speaker_channel_request_id = None
+            self._finish_speaker_channel(
+                exit_code == 0 and not was_stopping,
+                "Speaker channel command completed" if exit_code == 0 and not was_stopping else "Speaker channel test stopped by user" if was_stopping else f"Speaker channel command failed with exit code {exit_code}",
+                return_code=exit_code,
+                state="STOPPED" if was_stopping else None,
+            )
             return
         if request_id == self._playback_request_id:
             was_stopping = self._stop_requested
@@ -1667,7 +2123,10 @@ class AudioManager(QObject):
         if self._automation_capture_active:
             self._automation_capture_return_code = exit_code
         self._recording_active = False
-        if exit_code != 0 and not was_stopping:
+        # A SIGTERM is the normal completion code for the user-controlled
+        # recording stop path, including callers that issue the stop just
+        # before the process-finished event is delivered.
+        if exit_code != 0 and exit_code != -15 and not was_stopping:
             self._fail_recording(f"Recording failed with exit code {exit_code}")
             return
         self._set_recording_state(RecordingState.STOPPING)
@@ -1686,6 +2145,10 @@ class AudioManager(QObject):
             return
         if request_id == self._speaker_test_request_id and self._speaker_test_active:
             self._fail_speaker_test(f"Left / Right speaker test failed: {error}")
+            return
+        if request_id == self._speaker_channel_request_id and self._speaker_channel_active:
+            self._speaker_channel_request_id = None
+            self._finish_speaker_channel(False, f"Speaker channel test failed: {error}")
             return
         if request_id == self._playback_request_id:
             was_stopping = self._stop_requested
@@ -1747,6 +2210,14 @@ class AudioManager(QObject):
             self._clear_speaker_test_state()
             self.speaker_test_state_changed.emit("Disconnected")
             self.speaker_test_disconnected.emit()
+        speaker_channel_was_active = self._speaker_channel_active or self._request_kind == "speaker_channel_preflight"
+        if self._request_kind == "speaker_channel_preflight":
+            self._request_id = None
+            self._request_kind = None
+        if speaker_channel_was_active:
+            self._speaker_channel_request_id = None
+            self._speaker_channel_stop_requested = True
+            self._finish_speaker_channel(False, "Jetson disconnected", state="BLOCKED")
         if self._playback_active:
             self._clear_playback_state()
             self._set_playback_state("Disconnected")

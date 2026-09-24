@@ -22,6 +22,20 @@ class Card(QFrame):
         self.root_layout.addWidget(self.body)
 
 
+class SectionFrame(Card):
+    """Card with a shared semantic border state for dense test dashboards."""
+
+    def __init__(self, title: str | None = None, semantic: str = "neutral", parent=None):
+        super().__init__(title, parent)
+        self.setObjectName("SectionFrame")
+        self.set_semantic(semantic)
+
+    def set_semantic(self, semantic: str) -> None:
+        self.setProperty("semantic", semantic)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
 class StatusChip(QFrame):
     def __init__(self, text: str, state: str = "idle", parent=None):
         super().__init__(parent)

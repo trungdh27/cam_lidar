@@ -18,6 +18,8 @@ from desktop_app.audio.audio_models import parse_pactl_short_devices
 
 
 AUTOMATION_STATES = ("IDLE", "RUNNING", "PASS", "FAIL", "BLOCKED", "STOPPED")
+CLIPPING_THRESHOLD = 0.999
+WAV_CHUNK_FRAMES = 4096
 
 
 @dataclass(frozen=True)
@@ -239,65 +241,130 @@ def _decode_sample(raw: bytes, sample_width: int) -> int:
     raise ValueError(f"Unsupported PCM sample width: {sample_width} bytes")
 
 
-def analyze_wav_bytes(payload: bytes) -> dict[str, Any]:
-    """Analyze PCM WAV bytes without using the removed ``audioop`` module."""
-    with wave.open(io.BytesIO(payload), "rb") as wav:
-        channels = wav.getnchannels()
-        sample_rate = wav.getframerate()
-        sample_width = wav.getsampwidth()
-        frame_count = wav.getnframes()
-        compression = wav.getcomptype()
-        if compression != "NONE":
-            raise ValueError(f"Unsupported WAV compression: {compression}")
-        if channels <= 0 or sample_rate <= 0:
-            raise ValueError("WAV contains invalid channel or sample-rate metadata")
-        raw = wav.readframes(frame_count)
+def _dbfs(value: float) -> float | None:
+    """Return finite dBFS, using JSON-safe ``None`` for a zero signal."""
+    return 20.0 * math.log10(value) if value > 0.0 else None
 
-    bytes_per_frame = channels * sample_width
-    if bytes_per_frame <= 0 or len(raw) % bytes_per_frame:
-        raise ValueError("WAV PCM frame data is incomplete")
-    max_amplitude = float((1 << (sample_width * 8 - 1)) - 1)
-    peak = [0.0] * channels
-    sum_squares = [0.0] * channels
-    sample_counts = [0] * channels
-    clipping = 0
-    offset = 0
-    for _frame in range(frame_count):
-        for channel in range(channels):
-            sample = _decode_sample(raw[offset : offset + sample_width], sample_width)
-            offset += sample_width
-            normalized = abs(sample) / max_amplitude if max_amplitude else 0.0
-            peak[channel] = max(peak[channel], normalized)
-            sum_squares[channel] += normalized * normalized
-            sample_counts[channel] += 1
-            if abs(sample) >= max_amplitude:
-                clipping += 1
 
-    channel_data: dict[str, dict[str, float]] = {}
-    rms_values: list[float] = []
-    for index, count in enumerate(sample_counts):
-        rms = math.sqrt(sum_squares[index] / count) if count else 0.0
-        rms_values.append(rms)
-        channel_data[f"channel_{index + 1}"] = {
-            "peak": peak[index],
-            "rms": rms,
-            "rms_db": 20.0 * math.log10(rms) if rms > 0 else -120.0,
-        }
-    delta_db = None
-    if len(rms_values) >= 2 and rms_values[0] > 0 and rms_values[1] > 0:
-        delta_db = abs(20.0 * math.log10(rms_values[1] / rms_values[0]))
-    return {
-        "file_size": len(payload),
-        "duration_sec": frame_count / sample_rate,
+def _analysis_from_wave(wav: wave.Wave_read, file_size_bytes: int | None = None) -> dict[str, Any]:
+    """Analyze a WAV stream incrementally, without retaining all sample data."""
+    channels = wav.getnchannels()
+    sample_rate = wav.getframerate()
+    sample_width = wav.getsampwidth()
+    declared_frames = wav.getnframes()
+    compression = wav.getcomptype()
+    if compression != "NONE":
+        raise ValueError(f"Unsupported WAV compression: {compression}")
+    if channels <= 0 or sample_rate <= 0:
+        raise ValueError("WAV contains invalid channel or sample-rate metadata")
+
+    metadata = {
+        "file_size_bytes": file_size_bytes,
+        "file_size": file_size_bytes,
+        "duration_sec": declared_frames / sample_rate,
+        "sample_rate_hz": sample_rate,
         "sample_rate": sample_rate,
         "channels": channels,
+        "sample_width_bytes": sample_width,
         "bit_depth": sample_width * 8,
-        "frames": frame_count,
-        "clipping": clipping > 0,
-        "clipping_count": clipping,
-        "channel_delta_db": delta_db,
-        **channel_data,
+        "frame_count": declared_frames,
+        "frames": declared_frames,
     }
+    if sample_width != 2:
+        return {
+            **metadata,
+            "signal_analysis_supported": False,
+            "signal_analysis_reason": "Only PCM16 signal metrics are currently implemented.",
+            "channels_data": [],
+            "clipping_detected": None,
+            "channel_delta_db": None,
+            "ch2_minus_ch1_db": None,
+        }
+
+    peaks = [0.0] * channels
+    sums = [0.0] * channels
+    clipping_counts = [0] * channels
+    sample_counts = [0] * channels
+    frames_read = 0
+    bytes_per_frame = channels * sample_width
+    while True:
+        raw = wav.readframes(WAV_CHUNK_FRAMES)
+        if not raw:
+            break
+        if len(raw) % bytes_per_frame:
+            raise ValueError("WAV PCM frame data is truncated")
+        frame_count = len(raw) // bytes_per_frame
+        offset = 0
+        for _frame in range(frame_count):
+            for channel in range(channels):
+                sample = struct.unpack_from("<h", raw, offset)[0]
+                offset += sample_width
+                normalized = sample / 32768.0
+                absolute = abs(normalized)
+                peaks[channel] = max(peaks[channel], absolute)
+                sums[channel] += normalized * normalized
+                sample_counts[channel] += 1
+                if absolute >= CLIPPING_THRESHOLD:
+                    clipping_counts[channel] += 1
+        frames_read += frame_count
+
+    if frames_read != declared_frames:
+        raise ValueError(
+            f"WAV is truncated: header declares {declared_frames} frames, read {frames_read}"
+        )
+
+    channels_data: list[dict[str, Any]] = []
+    rms_values: list[float] = []
+    for index in range(channels):
+        count = sample_counts[index]
+        rms = math.sqrt(sums[index] / count) if count else 0.0
+        rms_values.append(rms)
+        channels_data.append(
+            {
+                "channel": index + 1,
+                "peak": peaks[index],
+                "peak_dbfs": _dbfs(peaks[index]),
+                "rms": rms,
+                "rms_dbfs": _dbfs(rms),
+                "rms_db": _dbfs(rms),
+                "clipping_count": clipping_counts[index],
+                "clipping_ratio": clipping_counts[index] / count if count else 0.0,
+                "clipping_detected": clipping_counts[index] > 0,
+                "zero_signal": peaks[index] == 0.0,
+                "sample_count": count,
+            }
+        )
+
+    delta_db = None
+    signed_delta_db = None
+    if len(rms_values) >= 2 and rms_values[0] > 0 and rms_values[1] > 0:
+        signed_delta_db = 20.0 * math.log10(rms_values[1] / rms_values[0])
+        delta_db = abs(signed_delta_db)
+    result: dict[str, Any] = {
+        **metadata,
+        "signal_analysis_supported": True,
+        "signal_analysis_reason": None,
+        "channels_data": channels_data,
+        "clipping_detected": any(item["clipping_detected"] for item in channels_data),
+        "clipping": any(item["clipping_detected"] for item in channels_data),
+        "clipping_count": sum(item["clipping_count"] for item in channels_data),
+        "channel_delta_db": delta_db,
+        "ch2_minus_ch1_db": signed_delta_db,
+    }
+    # Keep the original Phase 4B.1 keys as compatibility aliases for callers.
+    for item in channels_data:
+        result[f"channel_{item['channel']}"] = item
+    return result
+
+
+def analyze_wav_bytes(payload: bytes) -> dict[str, Any]:
+    """Analyze WAV bytes without using ``audioop``.
+
+    This helper remains useful for small unit-test fixtures. Runtime analysis
+    of robot captures uses :func:`analyze_wav`, which is chunked.
+    """
+    with wave.open(io.BytesIO(payload), "rb") as wav:
+        return _analysis_from_wave(wav, len(payload))
 
 
 def analyze_wav(path: str | Path) -> AudioActionResult:
@@ -311,10 +378,11 @@ def analyze_wav(path: str | Path) -> AudioActionResult:
                 success=False,
                 message="WAV file does not exist",
                 started_at=started_at,
-                data={"path": str(path)},
+                data={"path": str(path), "file_path": str(path), "file_exists": False},
             )
-        data = analyze_wav_bytes(path.read_bytes())
-        data["path"] = str(path)
+        with wave.open(str(path), "rb") as wav:
+            data = _analysis_from_wave(wav, path.stat().st_size)
+        data.update({"path": str(path), "file_path": str(path), "file_exists": True})
         return make_action_result(
             action="analyze_wav",
             success=True,
@@ -328,5 +396,5 @@ def analyze_wav(path: str | Path) -> AudioActionResult:
             success=False,
             message=f"WAV analysis failed: {exc}",
             started_at=started_at,
-            data={"path": str(path)},
+            data={"path": str(path), "file_path": str(path), "file_exists": path.is_file()},
         )

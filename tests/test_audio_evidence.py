@@ -107,6 +107,39 @@ class AudioEvidenceManagerTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertTrue(second.startswith(first.split("_")[0] + "_"))
 
+    def test_automation_session_uses_lazy_evidence_layout(self):
+        session_id = self.manager.start_automation_session(host="robot")
+        self.assertTrue(session_id.startswith("AUTO_AUDIO_"))
+        self.assertTrue((self.manager.evidence_path / "execution.log").is_file())
+        self.assertTrue((self.manager.evidence_path / "summary.json").is_file())
+        self.assertFalse((self.manager.evidence_path / "baseline").exists())
+        name = self.manager.next_capture_name()
+        self.assertEqual(name, "capture_001.wav")
+        self.assertTrue(self.manager.capture_path.is_dir())
+
+    def test_structured_baseline_capture_and_analysis_references(self):
+        self.manager.start_automation_session(host="robot")
+        self.manager.record_baseline_commands(
+            {
+                "usb": {"command": "lsusb", "return_code": 0, "stdout": "ID 2886:001a", "stderr": ""},
+                "commands": {
+                    "lsusb": {"command": "lsusb", "return_code": 0, "stdout": "ID 2886:001a", "stderr": ""},
+                    "cat /proc/asound/cards": {"command": "cat /proc/asound/cards", "return_code": 0, "stdout": "card 2", "stderr": ""},
+                    "amixer PCM,1": {"command": "amixer -c 2 sget 'PCM',1", "return_code": 0, "stdout": "70%", "stderr": ""},
+                },
+                "errors": [],
+            }
+        )
+        self.manager.record_capture(remote_path="/home/robot/capture_001.wav", local_path=self.manager.capture_path / "capture_001.wav", size_bytes=100)
+        analysis_path = self.manager.record_analysis({"path": "/home/robot/capture_001.wav", "clipping_detected": False})
+        self.assertTrue((self.manager.baseline_path / "usb.txt").is_file())
+        self.assertTrue((self.manager.baseline_path / "mixer.txt").is_file())
+        self.assertTrue(analysis_path.is_file())
+        summary = json.loads((self.manager.evidence_path / "summary.json").read_text())
+        self.assertEqual(summary["session_id"], self.manager.session_id)
+        self.assertEqual(len(summary["captures"]), 1)
+        self.assertEqual(len(summary["analyses"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
