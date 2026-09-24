@@ -97,13 +97,15 @@ class AudioAutomatedPageTests(unittest.TestCase):
         )
 
     def test_analysis_is_primary_and_runtime_is_compact(self):
-        self.assertEqual(self.page.analysis_card.findChild(QLabel, "CardTitle").text(), "AUDIO ANALYSE")
+        self.assertEqual(self.page.analysis_card.findChild(QLabel, "CardTitle").text(), "Audio Analyse")
         self.assertEqual(self.page.analysis_card.property("semantic"), "primary")
         self.assertEqual(self.page.log_text.objectName(), "AudioExecutionLog")
         self.assertIsNotNone(self.page._log_highlighter)
         self.assertNotIn("cpu", self.page._monitor_labels)
         self.assertNotIn("ram", self.page._monitor_labels)
-        self.assertIn("pcm1", self.page._runtime_audio_labels)
+        self.assertIn("mixer", self.page._device_labels)
+        self.assertIn("default_source", self.page._device_labels)
+        self.assertIn("default_sink", self.page._device_labels)
 
     def test_available_metrics_populate_grouped_analysis_without_rebuilding_card(self):
         card = self.page.analysis_card
@@ -116,6 +118,12 @@ class AudioAutomatedPageTests(unittest.TestCase):
         self.assertIn("-46.50 dBFS", all_text)
         self.assertIn("Channel Delta", all_text)
         self.assertEqual(self.page.critical_card.property("semantic"), "pass")
+        self.assertFalse(self.page.analysis_summary.isHidden())
+        self.assertEqual(self.page._analysis_summary_labels["file"].text(), "capture_001.wav")
+        self.assertEqual(self.page._analysis_summary_labels["duration"].text(), "10.001 s")
+        signal_grid = self.page._analysis_groups["signal"][1]
+        signal_labels = [signal_grid.itemAt(index).widget().text() for index in range(0, signal_grid.count(), 2)]
+        self.assertNotIn("Duration", signal_labels)
 
     def test_unavailable_channel_metric_is_hidden(self):
         result = self._analysis_result(
@@ -151,7 +159,7 @@ class AudioAutomatedPageTests(unittest.TestCase):
 
     def test_section_states_are_textual_and_semantically_bordered(self):
         self.assertEqual(self.page.analysis_card.property("semantic"), "primary")
-        self.assertEqual(self.page.critical_card.property("semantic"), "neutral")
+        self.assertEqual(self.page.critical_card.property("semantic"), "warning")
         self.page._update_analysis(self._analysis_result())
         self.assertEqual(self.page.critical_card.property("semantic"), "pass")
         self.assertEqual(self.page.test_status_chip.text_label.text(), "IDLE")

@@ -164,44 +164,50 @@ class AudioAutomatedPage(QWidget):
         status_row.addWidget(self.test_elapsed_label)
         root.addLayout(status_row)
 
-        session_card = SectionFrame("Session", "neutral")
-        session_grid = QGridLayout()
-        session_grid.setHorizontalSpacing(10)
-        session_grid.setVerticalSpacing(5)
-        session_grid.addWidget(self._key_label("Session"), 0, 0)
-        self.session_label = self._value_label("NO SESSION")
-        session_grid.addWidget(self.session_label, 0, 1)
-        session_grid.addWidget(self._key_label("Evidence"), 1, 0)
-        self.evidence_label = self._value_label("-")
-        session_grid.addWidget(self.evidence_label, 1, 1)
-        self.new_session_button = self._button("New Session", self.new_session)
-        session_grid.addWidget(self.new_session_button, 0, 2, 2, 1)
-        session_grid.setColumnStretch(1, 1)
-        session_card.body_layout.addLayout(session_grid)
-        root.addWidget(session_card)
-
-        state_card = SectionFrame("Device / Audio State", "neutral")
+        state_card = SectionFrame("Device / Audio State", "info")
         state_grid = QGridLayout()
         state_grid.setHorizontalSpacing(12)
-        state_grid.setVerticalSpacing(4)
+        state_grid.setVerticalSpacing(6)
         self._device_labels: dict[str, QLabel] = {}
-        for row, (key, label) in enumerate(
-            (
-                ("usb", "USB Device"),
-                ("alsa", "ALSA Card"),
-                ("pulse_source", "Pulse Source"),
-                ("pulse_sink", "Pulse Sink"),
-                ("mixer", "PCM,1"),
-            )
-        ):
-            state_grid.addWidget(self._key_label(label), row, 0)
+        state_fields = (
+            ("usb", "USB Device"),
+            ("alsa", "ALSA Card"),
+            ("pulse_source", "Pulse Source"),
+            ("pulse_sink", "Pulse Sink"),
+            ("default_source", "Default Source"),
+            ("default_sink", "Default Sink"),
+            ("mixer", "PCM,1"),
+            ("session", "Session"),
+        )
+        for index, (key, label) in enumerate(state_fields):
+            row, column = divmod(index, 2)
+            base_column = column * 2
+            state_grid.addWidget(self._key_label(label), row, base_column)
             value = self._value_label("UNKNOWN")
             self._device_labels[key] = value
-            state_grid.addWidget(value, row, 1)
-        state_grid.setColumnStretch(1, 1)
-        state_card.body_layout.addLayout(state_grid)
+            state_grid.addWidget(value, row, base_column + 1)
+        self.session_label = self._device_labels["session"]
+        self.session_label.setText("NO SESSION")
 
-        runtime_card = SectionFrame("RUNTIME AUDIO", "neutral")
+        state_grid.addWidget(self._key_label("Evidence"), 4, 0)
+        self.evidence_label = self._value_label("-")
+        state_grid.addWidget(self.evidence_label, 4, 1, 1, 3)
+        state_grid.addWidget(self._key_label("Last Capture"), 5, 0)
+        self.last_capture_label = self._value_label("-")
+        state_grid.addWidget(self.last_capture_label, 5, 1)
+        state_grid.addWidget(self._key_label("Last Analysis"), 5, 2)
+        self.last_analysis_label = self._value_label("-")
+        state_grid.addWidget(self.last_analysis_label, 5, 3)
+        for column in (1, 3):
+            state_grid.setColumnStretch(column, 1)
+        state_card.body_layout.addLayout(state_grid)
+        session_actions = QHBoxLayout()
+        session_actions.addStretch(1)
+        self.new_session_button = self._button("New Session", self.new_session)
+        session_actions.addWidget(self.new_session_button)
+        state_card.body_layout.addLayout(session_actions)
+
+        runtime_card = SectionFrame("Audio Runtime", "purple")
         runtime_grid = QGridLayout()
         runtime_grid.setHorizontalSpacing(10)
         runtime_grid.setVerticalSpacing(4)
@@ -227,26 +233,7 @@ class AudioAutomatedPage(QWidget):
         runtime_grid.setColumnStretch(1, 1)
         runtime_card.body_layout.addLayout(runtime_grid)
 
-        runtime_audio_grid = QGridLayout()
-        runtime_audio_grid.setHorizontalSpacing(10)
-        runtime_audio_grid.setVerticalSpacing(3)
         self._runtime_audio_labels: dict[str, QLabel] = {}
-        for row, (key, label, default) in enumerate(
-            (
-                ("device", "Device", "reSpeaker XVF3800"),
-                ("default_source", "Default Source", "--"),
-                ("default_sink", "Default Sink", "--"),
-                ("sample_rate", "Sample Rate", f"{self._default_sample_rate()} Hz"),
-                ("channels", "Channels", str(self._default_channels())),
-                ("pcm1", "PCM,1", "--"),
-            )
-        ):
-            runtime_audio_grid.addWidget(self._key_label(label), row, 0)
-            value = self._value_label(default)
-            self._runtime_audio_labels[key] = value
-            runtime_audio_grid.addWidget(value, row, 1)
-        runtime_audio_grid.setColumnStretch(1, 1)
-        runtime_card.body_layout.addLayout(runtime_audio_grid)
 
         self._runtime_chips: dict[str, StatusChip] = {}
         runtime_actions = QGridLayout()
@@ -261,13 +248,15 @@ class AudioAutomatedPage(QWidget):
             runtime_actions.addWidget(chip, row, 1)
         runtime_card.body_layout.addLayout(runtime_actions)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(10)
-        top_row.addWidget(state_card, 1)
-        top_row.addWidget(runtime_card, 1)
+        top_row = QGridLayout()
+        top_row.setHorizontalSpacing(10)
+        top_row.addWidget(state_card, 0, 0)
+        top_row.addWidget(runtime_card, 0, 1)
+        top_row.setColumnStretch(0, 3)
+        top_row.setColumnStretch(1, 2)
         root.addLayout(top_row)
 
-        actions_card = SectionFrame("Actions", "neutral")
+        actions_card = SectionFrame("Actions", "info")
         action_grid = QGridLayout()
         action_grid.setHorizontalSpacing(8)
         action_grid.setVerticalSpacing(7)
@@ -305,36 +294,56 @@ class AudioAutomatedPage(QWidget):
         self.auto_analyze_check.setChecked(True)
         actions_card.body_layout.addWidget(self.auto_analyze_check)
 
-        analysis_card = SectionFrame("AUDIO ANALYSE", "primary")
+        analysis_card = SectionFrame("Audio Analyse", "primary")
         self.analysis_card = analysis_card
-        self.analysis_label = self._value_label("No WAV analyzed yet.")
-        analysis_card.body_layout.addWidget(self.analysis_label)
+        self.analysis_empty_label = self._value_label("No successful captured WAV is available.")
+        analysis_card.body_layout.addWidget(self.analysis_empty_label)
+        self.analysis_summary = QWidget()
+        self.analysis_summary.setVisible(False)
+        summary_grid = QGridLayout(self.analysis_summary)
+        summary_grid.setContentsMargins(0, 0, 0, 0)
+        summary_grid.setHorizontalSpacing(10)
+        summary_grid.setVerticalSpacing(2)
+        self._analysis_summary_labels: dict[str, QLabel] = {}
+        for column, (key, title) in enumerate(
+            (("file", "File"), ("duration", "Duration"), ("rate", "Rate"), ("channels", "Channels"), ("bit_depth", "Bit Depth"))
+        ):
+            base_column = column * 2
+            summary_grid.addWidget(self._key_label(title), 0, base_column)
+            value = self._value_label("-")
+            self._analysis_summary_labels[key] = value
+            summary_grid.addWidget(value, 0, base_column + 1)
+        summary_grid.setColumnStretch(1, 3)
+        analysis_card.body_layout.addWidget(self.analysis_summary)
         self.analysis_groups_grid = QGridLayout()
         self.analysis_groups_grid.setHorizontalSpacing(8)
         self.analysis_groups_grid.setVerticalSpacing(8)
         self._analysis_groups: dict[str, tuple[SectionFrame, QGridLayout]] = {}
-        for index, (key, label) in enumerate(
+        for index, (key, label, semantic) in enumerate(
             (
-                ("signal", "SIGNAL LEVEL"),
-                ("quality", "AUDIO QUALITY"),
-                ("channels", "CHANNEL ANALYSIS"),
-                ("format", "CAPTURE FORMAT"),
+                ("signal", "Signal Level", "info"),
+                ("quality", "Audio Quality", "pass"),
+                ("channels", "Channel Analysis", "purple"),
+                ("format", "Capture Format", "teal"),
             )
         ):
-            frame = SectionFrame(label, "neutral")
+            frame = SectionFrame(label, semantic)
             grid = QGridLayout()
             grid.setHorizontalSpacing(10)
             grid.setVerticalSpacing(2)
             frame.body_layout.addLayout(grid)
+            frame.body_layout.setAlignment(grid, Qt.AlignmentFlag.AlignTop)
             frame.setVisible(False)
             self._analysis_groups[key] = (frame, grid)
             self.analysis_groups_grid.addWidget(frame, index // 2, index % 2)
         self.analysis_groups_grid.setColumnStretch(0, 1)
         self.analysis_groups_grid.setColumnStretch(1, 1)
+        self.analysis_groups_grid.setRowStretch(0, 1)
+        self.analysis_groups_grid.setRowStretch(1, 1)
         analysis_card.body_layout.addLayout(self.analysis_groups_grid)
         root.addWidget(analysis_card)
 
-        critical_card = SectionFrame("Critical Criteria / Result", "neutral")
+        critical_card = SectionFrame("Critical Criteria / Result", "warning")
         self.critical_card = critical_card
         self.criteria_grid = QGridLayout()
         self.criteria_grid.setHorizontalSpacing(10)
@@ -342,13 +351,15 @@ class AudioAutomatedPage(QWidget):
         critical_card.body_layout.addLayout(self.criteria_grid)
         self._set_criteria_empty()
 
-        lower_row = QHBoxLayout()
-        lower_row.setSpacing(10)
-        lower_row.addWidget(actions_card, 1)
-        lower_row.addWidget(critical_card, 1)
+        lower_row = QGridLayout()
+        lower_row.setHorizontalSpacing(10)
+        lower_row.addWidget(actions_card, 0, 0, Qt.AlignmentFlag.AlignTop)
+        lower_row.addWidget(critical_card, 0, 1, Qt.AlignmentFlag.AlignTop)
+        lower_row.setColumnStretch(0, 1)
+        lower_row.setColumnStretch(1, 1)
         root.addLayout(lower_row)
 
-        speaker_card = SectionFrame("SPEAKER CHANNEL TEST", "neutral")
+        speaker_card = SectionFrame("Speaker Channel Test", "info")
         self.speaker_channel_card = speaker_card
         speaker_grid = QGridLayout()
         speaker_grid.setHorizontalSpacing(8)
@@ -400,7 +411,7 @@ class AudioAutomatedPage(QWidget):
         self._reset_speaker_channel_ui()
         root.addWidget(speaker_card)
 
-        reliability_card = SectionFrame("Reliability / Iteration", "neutral")
+        reliability_card = SectionFrame("Reliability / Iteration", "teal")
         reliability_grid = QGridLayout()
         reliability_grid.setHorizontalSpacing(8)
         reliability_grid.setVerticalSpacing(7)
@@ -433,7 +444,7 @@ class AudioAutomatedPage(QWidget):
         reliability_card.body_layout.addWidget(self.iteration_last_label)
         root.addWidget(reliability_card)
 
-        log_card = SectionFrame("EXECUTION LOG", "console")
+        log_card = SectionFrame("Execution Log", "console")
         log_toolbar = QHBoxLayout()
         log_toolbar.addWidget(QLabel("Centralized Audio execution events"))
         log_toolbar.addStretch(1)
@@ -544,7 +555,7 @@ class AudioAutomatedPage(QWidget):
             button.setEnabled(connected)
         self.new_session_button.setEnabled(connected and not self.iteration_runner.active)
         if not connected:
-            for key in ("usb", "alsa", "pulse_source", "pulse_sink", "mixer"):
+            for key in ("usb", "alsa", "pulse_source", "pulse_sink", "default_source", "default_sink", "mixer"):
                 self._device_labels[key].setText("BLOCKED")
         self._update_session_labels()
         self._update_speaker_channel_controls()
@@ -692,12 +703,15 @@ class AudioAutomatedPage(QWidget):
     def _update_session_labels(self) -> None:
         if self.evidence_manager is None or not self.evidence_manager.is_active:
             self.session_label.setText("NO SESSION")
+            self.session_label.setToolTip("No active audio evidence session")
             self.evidence_label.setText("-")
+            self.evidence_label.setToolTip("")
             return
-        self.session_label.setText(self.evidence_manager.session_id or "-")
-        self.evidence_label.setText(self.evidence_manager.local_display_path)
-        self.session_label.setToolTip(str(self.evidence_manager.evidence_path or ""))
-        self.evidence_label.setToolTip(str(self.evidence_manager.evidence_path or ""))
+        evidence_path = str(self.evidence_manager.evidence_path or "")
+        self._set_display_label(self.session_label, self.evidence_manager.session_id or "-", maximum=30)
+        self._set_display_label(self.evidence_label, self.evidence_manager.local_display_path, maximum=72)
+        self.session_label.setToolTip(evidence_path)
+        self.evidence_label.setToolTip(evidence_path)
 
     def stop_actions(self) -> None:
         if self.iteration_runner.active:
@@ -778,6 +792,7 @@ class AudioAutomatedPage(QWidget):
 
         if self.iteration_runner.active and result.action == "capture":
             self._last_capture_path = result.data.get("local_path") or result.data.get("output_file") or self._last_capture_path
+            self._update_last_capture_label()
             self.iteration_runner.handle_action_result(result)
             self._update_session_labels()
             return
@@ -787,6 +802,7 @@ class AudioAutomatedPage(QWidget):
             self._set_test_result(result, "Pre-check complete")
         elif result.action == "capture":
             self._last_capture_path = result.data.get("local_path") or result.data.get("output_file") or self._last_capture_path
+            self._update_last_capture_label()
             if result.success and self.auto_analyze_check.isChecked():
                 self.run_analysis()
             else:
@@ -834,8 +850,8 @@ class AudioAutomatedPage(QWidget):
         if alsa_data.get("card_index") is not None:
             self._set_device_value("alsa", f"{alsa_data.get('state', 'PASS')} — card {alsa_data['card_index']}")
         pulse = result.data.get("pulse", {})
-        self._set_runtime_audio_value("default_source", pulse.get("default_source") or "NOT FOUND")
-        self._set_runtime_audio_value("default_sink", pulse.get("default_sink") or "NOT FOUND")
+        self._set_device_value("default_source", pulse.get("default_source") or "NOT FOUND")
+        self._set_device_value("default_sink", pulse.get("default_sink") or "NOT FOUND")
         mixer = result.data.get("mixer", {})
         level = mixer.get("final_level_percent")
         mixer_text = f"{level}% READY" if mixer.get("ready") and level is not None else "NOT AVAILABLE"
@@ -844,13 +860,24 @@ class AudioAutomatedPage(QWidget):
         self._set_runtime_audio_value("device", alsa_data.get("card_name") or "reSpeaker XVF3800")
 
     def _set_device_value(self, key: str, value: str) -> None:
+        self._set_display_label(self._device_labels[key], value)
+
+    @staticmethod
+    def _set_display_label(label: QLabel, value: object, maximum: int = 42) -> None:
+        """Keep dense technical values scannable while preserving the full value."""
         full = str(value)
-        display = full if len(full) <= 42 else full[:39] + "..."
-        self._device_labels[key].setText(display)
-        self._device_labels[key].setToolTip(full)
+        display = full if len(full) <= maximum else full[: maximum - 3] + "..."
+        label.setText(display)
+        label.setToolTip(full)
+
+    def _update_last_capture_label(self) -> None:
+        if self._last_capture_path:
+            self._set_display_label(self.last_capture_label, Path(self._last_capture_path).name)
 
     def _set_analysis_empty(self) -> None:
-        self.analysis_label.setText("No WAV analyzed yet.")
+        self.analysis_empty_label.setText("No successful captured WAV is available.")
+        self.analysis_empty_label.setVisible(True)
+        self.analysis_summary.setVisible(False)
         for frame, grid in self._analysis_groups.values():
             self._clear_grid(grid)
             frame.setVisible(False)
@@ -904,22 +931,28 @@ class AudioAutomatedPage(QWidget):
     def _update_analysis(self, result: AudioActionResult) -> None:
         if not result.success:
             self._set_analysis_empty()
-            self.analysis_label.setText(result.message)
+            self.analysis_empty_label.setText(f"No successful captured WAV is available. {result.message}")
             self.critical_card.set_semantic("error")
             return
         data = result.data
-        self.analysis_label.setText(
-            f"File: {Path(str(data.get('path', '-'))).name}\n"
-            f"Duration: {data.get('duration_sec', 0):.3f} sec   "
-            f"Rate: {data.get('sample_rate_hz', data.get('sample_rate'))} Hz   "
-            f"Channels: {data.get('channels')}   Bit Depth: {data.get('bit_depth')}-bit"
-        )
+        self.analysis_empty_label.setVisible(False)
+        self.analysis_summary.setVisible(True)
+        analysis_path = str(data.get("path", "-"))
+        summary_values = {
+            "file": Path(analysis_path).name,
+            "duration": f"{data.get('duration_sec', 0):.3f} s",
+            "rate": f"{data.get('sample_rate_hz', data.get('sample_rate'))} Hz",
+            "channels": str(data.get("channels", "-")),
+            "bit_depth": f"{data.get('bit_depth', '-')}-bit",
+        }
+        for key, value in summary_values.items():
+            self._set_display_label(self._analysis_summary_labels[key], value, maximum=36)
+        self._analysis_summary_labels["file"].setToolTip(analysis_path)
+        self._set_display_label(self.last_analysis_label, Path(analysis_path).name)
         channels = data.get("channels_data", [])
         peak_values = [channel.get("peak") for channel in channels if channel.get("peak") is not None]
         rms_values = [channel.get("rms") for channel in channels if channel.get("rms") is not None]
         signal_rows: list[tuple[str, str]] = []
-        if data.get("duration_sec") is not None:
-            signal_rows.append(("Duration", f"{data['duration_sec']:.3f} s"))
         if peak_values:
             signal_rows.append(("Max Peak", self._format_metric(max(peak_values))))
         if rms_values:
