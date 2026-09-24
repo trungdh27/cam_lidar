@@ -67,6 +67,18 @@ QFrame#SectionFrame[semantic="primary"] {
     border: 2px solid #4C8DFF;
 }
 
+QFrame#SectionFrame[semantic="info"] {
+    border: 2px solid #84ADFF;
+}
+
+QFrame#SectionFrame[semantic="purple"] {
+    border: 2px solid #B692F6;
+}
+
+QFrame#SectionFrame[semantic="teal"] {
+    border: 2px solid #4DB6AC;
+}
+
 QFrame#SectionFrame[semantic="neutral"] {
     border: 1px solid #D8E0EB;
 }

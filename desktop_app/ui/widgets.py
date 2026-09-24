@@ -23,7 +23,11 @@ class Card(QFrame):
 
 
 class SectionFrame(Card):
-    """Card with a shared semantic border state for dense test dashboards."""
+    """Card with a shared semantic border state for dense test dashboards.
+
+    Semantic values are themed centrally so feature pages can use subtle visual
+    grouping without each page owning a collection of inline styles.
+    """
 
     def __init__(self, title: str | None = None, semantic: str = "neutral", parent=None):
         super().__init__(title, parent)
