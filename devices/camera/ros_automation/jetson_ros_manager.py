@@ -7,9 +7,11 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,10 @@ from pathlib import Path
 MARKER = "CAMERA_ROS_JSON="
 ROOT = Path("/tmp/cam_lidar/ros_camera")
 MAX_LOG_BYTES = 262144
+ACTIVE_OPERATION = None
+ACTIVE_COMMAND = None
+ACTIVE_TIMEOUT_S = None
+ACTIVE_COMMAND_STARTED = None
 
 LAUNCH_WORKER = r"""
 import json
@@ -583,11 +589,40 @@ try:
             str(namespace).rstrip("/") + "/" + str(name)
         )
         names.append(full_name if full_name.startswith("/") else "/" + full_name)
-    publisher_counts = {
-        topic: len(node.get_publishers_info_by_topic(topic)) for topic in topics
+    graph_topics = {
+        str(topic): [str(item) for item in kinds]
+        for topic, kinds in node.get_topic_names_and_types()
     }
+    requested_topics = topics or list(graph_topics)
+    publisher_counts = {}
+    publisher_nodes = {}
+    publisher_metadata = {}
+    for topic in requested_topics:
+        endpoints = list(node.get_publishers_info_by_topic(topic))
+        publisher_counts[topic] = len(endpoints)
+        owner_names = []
+        endpoint_records = []
+        for endpoint in endpoints:
+            name = str(getattr(endpoint, "node_name", "") or "")
+            namespace = str(getattr(endpoint, "node_namespace", "") or "")
+            if name:
+                full_name = name if name.startswith("/") else namespace.rstrip("/") + "/" + name
+                owner_names.append(full_name if full_name.startswith("/") else "/" + full_name)
+            qos = getattr(endpoint, "qos_profile", None)
+            endpoint_records.append({
+                "node_name": name or None,
+                "node_namespace": namespace or None,
+                "reliability": str(getattr(getattr(qos, "reliability", None), "name", "UNKNOWN")),
+                "durability": str(getattr(getattr(qos, "durability", None), "name", "UNKNOWN")),
+                "history": str(getattr(getattr(qos, "history", None), "name", "UNKNOWN")),
+                "depth": int(getattr(qos, "depth", 0) or 0),
+            })
+        publisher_nodes[topic] = sorted(set(owner_names))
+        publisher_metadata[topic] = endpoint_records
     print(MARKER + json.dumps({
-        "nodes": sorted(set(names)), "publisher_counts": publisher_counts,
+        "nodes": sorted(set(names)), "topics": graph_topics,
+        "publisher_counts": publisher_counts, "publisher_nodes": publisher_nodes,
+        "publisher_metadata": publisher_metadata,
     }, separators=(",", ":")))
 finally:
     node.destroy_node()
@@ -604,12 +639,17 @@ def utc_now():
 
 
 def shell_environment(setup_files):
+    global ACTIVE_OPERATION, ACTIVE_COMMAND, ACTIVE_TIMEOUT_S, ACTIVE_COMMAND_STARTED
     commands = ["source " + shlex.quote(path) for path in setup_files]
     commands.append("env -0")
+    ACTIVE_OPERATION = "source ROS environment"
+    ACTIVE_COMMAND = "bash -lc <source ROS setup files; env -0>"
+    ACTIVE_TIMEOUT_S = 4
+    ACTIVE_COMMAND_STARTED = time.monotonic()
     result = subprocess.run(
         ["bash", "-lc", "; ".join(commands)],
         capture_output=True,
-        timeout=8,
+        timeout=ACTIVE_TIMEOUT_S,
         check=False,
     )
     if result.returncode != 0:
@@ -623,6 +663,11 @@ def shell_environment(setup_files):
 
 
 def command_result(command, environment, timeout=6):
+    global ACTIVE_OPERATION, ACTIVE_COMMAND, ACTIVE_TIMEOUT_S, ACTIVE_COMMAND_STARTED
+    ACTIVE_OPERATION = "ROS CLI command"
+    ACTIVE_COMMAND = " ".join(str(item) for item in command)
+    ACTIVE_TIMEOUT_S = timeout
+    ACTIVE_COMMAND_STARTED = time.monotonic()
     result = subprocess.run(
         command,
         env=environment,
@@ -661,7 +706,8 @@ def workspace_candidates():
     return sorted(candidates)
 
 
-def resolve_environment(required_packages, preferred_setup_files=None, expected_distro="humble"):
+def resolve_environment(required_packages, preferred_setup_files=None, expected_distro="humble", verify_cli=True):
+    started = time.monotonic()
     system_candidates = sorted(Path("/opt/ros").glob("*/setup.bash"))
     expected = Path("/opt/ros") / expected_distro / "setup.bash"
     if expected.is_file():
@@ -688,7 +734,10 @@ def resolve_environment(required_packages, preferred_setup_files=None, expected_
     if preferred:
         setup_options.append(preferred)
     setup_options.append([base])
-    setup_options.extend([base, candidate] for candidate in workspace_candidates())
+    # ROS graph tests do not require vendor packages. Avoid serially sourcing
+    # every workspace for these package-independent discovery operations.
+    if required_packages:
+        setup_options.extend([base, candidate] for candidate in workspace_candidates())
     best = None
     best_environment = None
     best_rank = (-1, -1)
@@ -718,6 +767,8 @@ def resolve_environment(required_packages, preferred_setup_files=None, expected_
             best = (setups, packages)
             best_environment = environment
             best_rank = rank
+        if not required_packages:
+            break
 
     if best is None:
         return {
@@ -732,12 +783,16 @@ def resolve_environment(required_packages, preferred_setup_files=None, expected_
             "errors": ["ROS setup files did not produce an executable ros2 CLI"],
         }, None
     setups, packages = best
-    code, help_output, help_error = command_result(["ros2", "--help"], best_environment)
+    if verify_cli:
+        code, help_output, help_error = command_result(["ros2", "--help"], best_environment, timeout=2)
+    else:
+        code, help_output, help_error = 0, "ros2 executable found on PATH", ""
     distro = best_environment.get("ROS_DISTRO")
     errors = []
     if code != 0:
         errors.append(help_error or "ros2 --help failed")
     result = {
+        "hostname": socket.gethostname(),
         "ros2_available": code == 0,
         "ros_distro": distro,
         "ros_version_output": help_output.splitlines()[0] if help_output else None,
@@ -748,6 +803,7 @@ def resolve_environment(required_packages, preferred_setup_files=None, expected_
         "packages": packages,
         "warnings": list(dict.fromkeys(warnings)),
         "errors": errors,
+        "resolution_duration_s": round(time.monotonic() - started, 3),
     }
     return result, best_environment
 
@@ -848,6 +904,11 @@ def graph(environment):
 
 def direct_graph_probe(environment, topics=()):
     """One direct rclpy graph sample for recovery-critical node loss checks."""
+    global ACTIVE_OPERATION, ACTIVE_COMMAND, ACTIVE_TIMEOUT_S, ACTIVE_COMMAND_STARTED
+    ACTIVE_OPERATION = "ROS graph snapshot"
+    ACTIVE_COMMAND = "python3 -c <embedded rclpy graph probe>"
+    ACTIVE_TIMEOUT_S = 4
+    ACTIVE_COMMAND_STARTED = time.monotonic()
     try:
         result = subprocess.run(
             [sys.executable, "-c", GRAPH_PROBE, json.dumps({"topics": list(topics)})], env=environment,
@@ -870,7 +931,10 @@ def direct_graph_probe(environment, topics=()):
         }
     return {
         "nodes": list(payload.get("nodes") or ()),
-        "publisher_counts": dict(payload.get("publisher_counts") or {}), "ok": True,
+        "topics": dict(payload.get("topics") or {}),
+        "publisher_counts": dict(payload.get("publisher_counts") or {}),
+        "publisher_nodes": dict(payload.get("publisher_nodes") or {}), "ok": True,
+        "publisher_metadata": dict(payload.get("publisher_metadata") or {}),
         "method": "rclpy_direct", "error": None,
     }
 
@@ -969,12 +1033,67 @@ request = json.loads(sys.argv[1])
 action = request.get("action")
 try:
     if action == "environment":
+        action_started = time.monotonic()
         environment_info, _environment = resolve_environment(
             request.get("required_packages") or [],
             request.get("setup_files"),
             request.get("expected_distro") or "humble",
         )
-        emit({"ok": True, "environment": environment_info})
+        emit({"ok": True, "environment": environment_info, "diagnostics": {"operation": "ROS environment discovery", "duration_s": round(time.monotonic() - action_started, 3)}})
+        raise SystemExit(0)
+
+    if action == "camera_graph":
+        action_started = time.monotonic()
+        environment_info, environment = resolve_environment(
+            [], request.get("setup_files"), request.get("expected_distro") or "humble", verify_cli=False,
+        )
+        if environment is None or not environment_info.get("environment_ready"):
+            emit({"ok": False, "error_type": "ROS_ENVIRONMENT_UNAVAILABLE", "error": "ROS environment unavailable for graph discovery", "environment": environment_info})
+            raise SystemExit(0)
+        graph_started = time.monotonic()
+        graph_snapshot = direct_graph_probe(environment)
+        graph_duration = round(time.monotonic() - graph_started, 3)
+        if not graph_snapshot.get("ok"):
+            emit({"ok": False, "error_type": "ROS_GRAPH_UNAVAILABLE", "error": graph_snapshot.get("error") or "rclpy graph probe failed", "environment": environment_info, "diagnostics": {"operation": "ROS graph snapshot", "command": "python3 -c <embedded rclpy graph probe>", "timeout_s": graph_snapshot.get("timeout_s", 4), "duration_s": graph_duration, "exception_type": graph_snapshot.get("exception_type")}})
+            raise SystemExit(0)
+        # Parameters are supplemental identity evidence. Query at most one
+        # image publisher, one parameter list, and one value under short
+        # per-command limits; graph validation never depends on this evidence.
+        node_parameters = {}
+        image_types = {"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"}
+        image_topics = {
+            topic for topic, types in (graph_snapshot.get("topics") or {}).items()
+            if image_types.intersection(types)
+        }
+        publisher_nodes = {
+            node for topic in image_topics
+            for node in (graph_snapshot.get("publisher_nodes") or {}).get(topic, ())
+        }
+        parameter_started = time.monotonic()
+        for node_name in sorted(publisher_nodes)[:1]:
+            try:
+                code, output, _error = command_result(["ros2", "param", "list", node_name], environment, timeout=0.6)
+            except subprocess.TimeoutExpired:
+                break
+            if code != 0:
+                break
+            names = [line.strip() for line in output.splitlines() if re.search(r"serial|device|camera_name|camera_model|(^|_)model($|_)", line, re.I)]
+            if names:
+                parameter = names[0]
+                try:
+                    value_code, value_output, _value_error = command_result(["ros2", "param", "get", node_name, parameter], environment, timeout=0.6)
+                except subprocess.TimeoutExpired:
+                    value_code, value_output = 1, ""
+                if value_code == 0 and value_output:
+                    node_parameters[node_name] = {parameter: value_output[-512:]}
+        graph_snapshot["node_parameters"] = node_parameters
+        graph_snapshot["stage_timings_s"] = {
+            "environment_resolution": environment_info.get("resolution_duration_s"),
+            "graph_probe": graph_duration,
+            "identity_parameter_enrichment": round(time.monotonic() - parameter_started, 3),
+            "total": round(time.monotonic() - action_started, 3),
+        }
+        emit({"ok": True, "graph": graph_snapshot, "environment": environment_info, "diagnostics": {"operation": "ROS graph discovery", "duration_s": graph_snapshot["stage_timings_s"]["total"], "stage_timings_s": graph_snapshot["stage_timings_s"]}})
         raise SystemExit(0)
 
     if action == "launch_arguments":
@@ -1442,5 +1561,14 @@ try:
 except SystemExit:
     raise
 except Exception as exc:
-    emit({"ok": False, "error_type": "ROS_PROBE_ERROR", "error": type(exc).__name__ + ": " + str(exc)})
+    diagnostics = {
+        "operation": ACTIVE_OPERATION or action or "unknown",
+        "command": ACTIVE_COMMAND,
+        "timeout_s": ACTIVE_TIMEOUT_S,
+        "duration_s": round(time.monotonic() - ACTIVE_COMMAND_STARTED, 3) if ACTIVE_COMMAND_STARTED else None,
+        "exception_type": type(exc).__name__,
+        "traceback": traceback.format_exc()[-5000:],
+    }
+    error_type = "ROS_OPERATION_TIMEOUT" if isinstance(exc, subprocess.TimeoutExpired) else "ROS_PROBE_ERROR"
+    emit({"ok": False, "error_type": error_type, "error": type(exc).__name__ + ": " + str(exc), "diagnostics": diagnostics})
 '''

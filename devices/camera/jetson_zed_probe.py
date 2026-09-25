@@ -281,15 +281,13 @@ def all_zed_devices(sl, sdk_version):
             )
         except Exception as exc:
             notes.append(api + " device list failed: " + str(exc))
-    # ZED X One enumeration differs between SDK releases. Reuse the existing
-    # bounded Explorer fallback when the mono API is unavailable or empty.
-    if not camera_one_available or not any(
-        str(item.get("api")) == "CameraOne" for item in devices
-    ):
-        explorer, explorer_error = explorer_devices(sdk_version)
-        devices.extend(explorer)
-        if explorer_error:
-            notes.append(explorer_error)
+    # Explorer is a supplemental *physical* source, not merely a CameraOne
+    # fallback. A production-owned camera may be omitted by a SDK device list
+    # while Explorer still reports its serial, I2C path and busy state.
+    explorer, explorer_error = explorer_devices(sdk_version)
+    devices.extend(explorer)
+    if explorer_error:
+        notes.append(explorer_error)
     return deduplicate_devices(devices), "; ".join(notes) or None
 
 
@@ -297,16 +295,26 @@ def main():
     request = json.loads(sys.argv[1])
     profile_id = request.get("profile_id", "")
     mono = profile_id in ("zed_x_one_4k", "zed_x_one_gs")
+    action = request.get("action")
     try:
         import pyzed.sl as sl
     except Exception as exc:
+        if action == "discover_all":
+            devices, explorer_error = explorer_devices("Unknown")
+            emit({
+                "ok": True, "detected": bool(devices), "devices": devices,
+                "raw_devices": list(devices), "sdk_available": False,
+                "sdk_version": "Unknown",
+                "discovery_note": "pyzed.sl unavailable: " + str(exc)
+                + ("; " + explorer_error if explorer_error else ""),
+            })
+            return 0
         emit({"ok": False, "error_type": "sdk_unavailable", "error": "pyzed.sl unavailable: " + str(exc), "sdk_available": False})
         return 20
 
     try: sdk_version = str(sl.Camera.get_sdk_version())
     except Exception: sdk_version = "Unknown"
 
-    action = request.get("action")
     if action == "discover_all":
         devices, note = all_zed_devices(sl, sdk_version)
         emit({

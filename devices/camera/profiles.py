@@ -121,3 +121,21 @@ def get_camera_profile(profile_id: str) -> CameraProfile:
         if profile.profile_id == profile_id:
             return profile
     raise KeyError(f"Unknown camera profile: {profile_id}")
+
+
+def profile_id_for_camera(device) -> str | None:
+    """Return only a profile known to be compatible with this physical camera.
+
+    Inventory model tokens and profile ids are deliberately not assumed to be
+    identical (for example ``d435i`` vs ``realsense_d435i``).  An ambiguous
+    ZED X One runtime model has no automatic 4K/GS fallback: the node name is
+    not hardware authority.
+    """
+    vendor = str(getattr(device, "vendor", "")).casefold()
+    normalized = str(getattr(device, "normalized_model", "")).casefold()
+    if "realsense" in vendor or normalized in {"d405", "d435i"}:
+        candidate = f"realsense_{normalized}"
+        return candidate if any(item.profile_id == candidate for item in CAMERA_PROFILES) else None
+    if normalized in {"zed_x_mini", "zed_x", "zed_x_one_4k", "zed_x_one_gs"}:
+        return normalized
+    return None

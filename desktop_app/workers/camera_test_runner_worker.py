@@ -14,6 +14,7 @@ from devices.camera.testing import (
     TestStatus,
     TestTimeoutError,
 )
+from core.testing.errors import RemoteOperationTimeoutError
 
 
 class SharedJetsonOperationClient(QObject):
@@ -53,10 +54,31 @@ class SharedJetsonOperationClient(QObject):
                     raise TestCancelledError("Test run was cancelled.")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TestTimeoutError(f"{name} exceeded {timeout} seconds.")
+                    elapsed = round(time.monotonic() - (deadline - timeout), 3)
+                    error = RemoteOperationTimeoutError(
+                        f"Shared Jetson operation '{name}' exceeded its {timeout:g} s client deadline "
+                        f"(elapsed={elapsed:g} s; request_id={request_id})."
+                    )
+                    error.diagnostics = {
+                        "operation": name,
+                        "timeout_s": timeout,
+                        "elapsed_s": elapsed,
+                        "request_id": request_id,
+                        "stage": "waiting for shared Jetson operation result",
+                    }
+                    raise error
                 self._condition.wait(min(0.1, remaining))
             ok, value = self._results.pop(request_id)
-        if not ok: raise RuntimeError(value)
+        if not ok:
+            error = RuntimeError(value)
+            error.diagnostics = {
+                "operation": name,
+                "timeout_s": timeout,
+                "elapsed_s": round(time.monotonic() - (deadline - timeout), 3),
+                "request_id": request_id,
+                "stage": "shared Jetson operation failed",
+            }
+            raise error
         return value or {}
 
     @Slot(str, object)

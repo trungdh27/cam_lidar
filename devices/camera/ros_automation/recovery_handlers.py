@@ -2,6 +2,7 @@ import time
 
 from core.testing.models import utc_now
 from devices.camera.ros_automation.handlers import (
+    DynamicRosCameraAdapter,
     RosHandlerBase,
     RosNodeLaunchHandler,
     _failure_reason,
@@ -958,7 +959,12 @@ class RosSessionCleanupHandler(RosRecoveryHandlerBase):
             failures = []
             cycles = []
             created = []
-            spec = context.services["ros_adapter_registry"].resolve(device).build_launch_spec(device)
+            discovery = self.graph_discovery(context, environment)
+            association = discovery.association_for(device.device_uid) if discovery else None
+            if association and association.reliable:
+                spec = DynamicRosCameraAdapter(association.endpoint).build_launch_spec(device)
+            else:
+                spec = context.services["ros_adapter_registry"].resolve(device).build_launch_spec(device)
             baseline = self._audit(manager, environment.get("setup_files") or (), (), (spec.expected_node,), definition.parameters.get("cleanup_timeout_s") or 8)
             baseline_nodes = set(baseline.get("node_names") or ())
             baseline_runtime_count = int(baseline.get("owned_runtime_directory_count") or 0)
