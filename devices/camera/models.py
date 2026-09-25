@@ -13,6 +13,14 @@ class CameraConnectionState(str, Enum):
     ERROR = "ERROR"
 
 
+class CameraAccessMode(str, Enum):
+    """How this application may safely monitor a discovered camera."""
+
+    DIRECT_SDK = "DIRECT_SDK"
+    ROS_READ_ONLY = "ROS_READ_ONLY"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class CameraTransport(str, Enum):
     GMSL = "GMSL"
     USB = "USB"
@@ -80,6 +88,18 @@ class CameraDevice:
     profile_status: CameraProfileStatus = CameraProfileStatus.NOT_APPLICABLE
     physical_status: CameraPhysicalStatus = CameraPhysicalStatus.DETECTED
     ros_readiness: CameraRosReadiness = CameraRosReadiness.UNKNOWN
+    # Discovery sources describe different facts.  In particular, an SDK-open
+    # failure must never erase a camera which production ROS is publishing.
+    physical_detected: bool = True
+    direct_sdk_available: bool | None = None
+    ros_available: bool = False
+    ros_node: str | None = None
+    device_info_topic: str | None = None
+    rgb_topic: str | None = None
+    access_mode: CameraAccessMode = CameraAccessMode.UNAVAILABLE
+    owner: str | None = None
+    busy: bool = False
+    stream_active: bool = False
     discovery_source: str = "unknown"
     discovery_errors: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict = field(default_factory=dict)
@@ -88,7 +108,7 @@ class CameraDevice:
         payload = asdict(self)
         for key in (
             "transport", "usb_speed", "profile_status", "physical_status",
-            "ros_readiness",
+            "ros_readiness", "access_mode",
         ):
             value = payload.get(key)
             payload[key] = value.value if isinstance(value, Enum) else value

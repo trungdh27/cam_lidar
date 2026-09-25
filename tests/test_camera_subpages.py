@@ -5,13 +5,14 @@ from dataclasses import replace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
 from desktop_app.services.camera_inventory_service import CameraInventoryService
 from desktop_app.services.jetson_connection_service import JetsonConnectionService
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.camera_page import CameraPage
 from devices.camera.discovery import normalize_realsense_device, normalize_zed_device
+from devices.camera.discovery import normalize_ros_camera_device
 from devices.camera.inventory import CameraInventorySnapshot
 from devices.camera.ros_registry import RosCameraDriverRegistry
 
@@ -45,7 +46,7 @@ class CameraSubpageTests(unittest.TestCase):
     def test_three_subpages_filters_details_and_persistence(self):
         self.assertEqual(self.page.camera_pages.count(), 3)
         self.assertEqual(self.page.camera_pages.currentIndex(), 0)
-        self.page.open_test_manager_button.click()
+        self.page.tests_tab_button.click()
         self.assertEqual(self.page.camera_pages.currentIndex(), 1)
         self.page.ros_automation_tab_button.click()
         self.assertEqual(self.page.camera_pages.currentIndex(), 2)
@@ -103,6 +104,53 @@ class CameraSubpageTests(unittest.TestCase):
         self.assertIsNone(self.page.target_camera_combo.currentData())
         self.assertGreaterEqual(self.page.test_table.minimumHeight(), 280)
 
+    def test_monitor_omits_duplicate_automated_tests_summary_and_expands_log(self):
+        monitor_text = self.page.monitor_page.findChildren(QLabel)
+        self.assertNotIn("Automated Tests", [label.text() for label in monitor_text])
+        self.assertEqual(self.page.camera_pages.count(), 3)
+        self.assertEqual(self.page.tests_tab_button.text(), "AUTOMATED TESTS")
+        layout = self.page.monitor_page.layout()
+        self.assertEqual(layout.count(), 3)
+        self.assertGreater(layout.stretch(2), layout.stretch(0))
+
+    def test_monitor_header_cards_are_compact_and_overview_scrolls(self):
+        self.assertEqual(
+            self.page.camera_device_card.sizePolicy().verticalPolicy(),
+            QSizePolicy.Policy.Maximum,
+        )
+        self.assertEqual(
+            self.page.device_overview_card.sizePolicy().verticalPolicy(),
+            QSizePolicy.Policy.Maximum,
+        )
+        self.assertEqual(
+            self.page.overview_table.verticalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+        )
+        self.assertEqual(
+            self.page.overview_table.verticalHeader().defaultSectionSize(), 20
+        )
+        self.assertGreater(self.page.overview_table.maximumHeight(), 0)
+        self.assertEqual(self.page.monitor_page.layout().stretch(2), 1)
+
+    def test_monitor_compact_top_row_releases_space_to_live_log(self):
+        self.page.resize(1710, 864)
+        self.page.show()
+        self.app.processEvents()
+
+        monitor_layout = self.page.monitor_page.layout()
+        self.assertEqual(monitor_layout.stretch(0), 0)
+        self.assertEqual(monitor_layout.stretch(1), 0)
+        self.assertEqual(monitor_layout.stretch(2), 1)
+        self.assertLess(
+            self.page.device_overview_card.height(),
+            self.page.live_log_card.height(),
+        )
+        self.assertGreater(self.page.live_log.height(), 110)
+        self.assertLessEqual(
+            self.page.device_overview_card.height(),
+            self.page.camera_device_card.height() + 60,
+        )
+
     def test_ros_automation_lists_phase_8_3a_and_8_3b_tests_and_renders_details(self):
         self.assertEqual(self.page.ros_test_table.rowCount(), 13)
         self.assertEqual(
@@ -142,7 +190,9 @@ class CameraSubpageTests(unittest.TestCase):
         self.page.target_camera_combo.setCurrentIndex(1)
         details = self.page.ros_test_detail_text.toPlainText()
         self.assertIn("ZED X Mini — SN58651554", details)
-        self.assertIn("zed_wrapper", details)
+        self.assertIn("Prerequisites: ROS Graph: Required", details)
+        self.assertIn("Physical Identity: Not Required", details)
+        self.assertNotIn("Driver: zed_wrapper", details)
 
     def test_ros_workspace_prioritizes_table_and_places_log_beside_it(self):
         self.page.resize(1600, 900)
@@ -322,6 +372,79 @@ class CameraSubpageTests(unittest.TestCase):
         self.assertEqual(self.page.inventory_table.rowCount(), 2)
         self.assertEqual(self.page.target_camera_combo.currentData(), realsense.device_uid)
         self.assertEqual(self.page.test_statuses["CS-007"], "PASS")
+
+    def test_ros_read_only_monitor_never_uses_direct_sdk_or_stops_production(self):
+        device = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "53204228",
+            "driver_name": "ZED SDK", "driver_version": "5.4.1", "input_type": "GMSL",
+            "resolution": "1920x1080", "target_fps": "60",
+            "ros_node": "/sensors/zed_x_mini",
+            "device_info_topic": "/sensors/camera/zed_x_mini/device_info",
+            "rgb_topic": "/sensors/camera/zed_x_mini/rgb", "stream_active": True,
+        })
+        self.inventory_service.inventory._devices = (device,)
+        self.page.device_combo.clear()
+        self.page.device_combo.addItem("ZED X Mini / SN53204228", device.device_uid)
+        self.page._connect_ros_read_only(device)
+        self.assertEqual(self.page.connection_status_label.text(), "CONNECTED VIA ROS")
+        self.assertIn("ROS READ ONLY", self.page.overview_table.item(12, 1).text())
+
+        starts, stops = [], []
+        self.page.ros_monitor_controller.start = lambda payload: starts.append(payload)
+        self.page.ros_monitor_controller.stop = lambda: stops.append(True)
+        self.page._request_action("start_stream")
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(starts[0]["rgb_topic"], "/sensors/camera/zed_x_mini/rgb")
+        self.page._request_action("stop_stream")
+        self.assertEqual(len(stops), 1)
+        self.page._request_action("disconnect")
+        self.assertGreaterEqual(len(stops), 2)
+        self.assertEqual(self.page.connection_state.value, "DISCONNECTED")
+
+    def test_device_selection_replaces_incompatible_zed_profile_and_stream_options(self):
+        zed = RosCameraDriverRegistry().map_device(
+            normalize_zed_device({
+                "model": "ZED X One 4K", "serial_number": "111", "api": "Camera",
+            }), {"zed_wrapper": True},
+        )
+        d435i = RosCameraDriverRegistry().map_device(
+            normalize_realsense_device({
+                "model": "Intel RealSense D435i", "serial": "242322076751",
+                "physical_port": "2-1", "usb_type_descriptor": "5000",
+                "backend": "pyrealsense2", "profile_status": "AVAILABLE",
+            }), {"realsense2_camera": True},
+        )
+        self._publish_inventory((zed, d435i), "2026-09-25T01:00:00+00:00")
+        self.page.device_combo.setCurrentIndex(0)
+        self.assertEqual(self.page.model_combo.currentData(), "zed_x_one_4k")
+        self.assertIn("HD4K", self.page.resolution_combo.itemText(0))
+        self.page.device_combo.setCurrentIndex(1)
+        self.assertEqual(self.page.model_combo.currentData(), "realsense_d435i")
+        self.assertNotIn("HD4K", [
+            self.page.resolution_combo.itemText(index)
+            for index in range(self.page.resolution_combo.count())
+        ])
+        self.assertEqual(self.page.overview_table.item(0, 1).text(), "D435i")
+        self.assertEqual(self.page.overview_table.item(2, 1).text(), "242322076751")
+
+    def test_discovery_logs_zero_adapter_and_final_inventory(self):
+        device = normalize_realsense_device({
+            "model": "Intel RealSense D435i", "serial": "242322076751",
+            "physical_port": "2-1", "usb_type_descriptor": "5000",
+            "backend": "pyrealsense2", "profile_status": "AVAILABLE",
+        })
+        snapshot = CameraInventorySnapshot(
+            devices=(device,), adapter_errors={}, adapter_warnings={},
+            discovered_at="2026-09-25T01:00:00+00:00", ros2_available=True,
+            adapter_candidates={"zed": (), "realsense": (device,)}, raw_candidate_count=1,
+        )
+        self.inventory_service.inventory._devices = (device,)
+        self.inventory_service.inventory._snapshot = snapshot
+        self.page._on_inventory_discovery_completed(snapshot)
+        log = self.page.live_log.toPlainText()
+        self.assertIn("ZED physical discovery returned 0 candidate(s).", log)
+        self.assertIn("Final camera: Intel RealSense D435i SN242322076751", log)
+        self.assertIn("Raw candidates: 1", log)
 
     def _publish_inventory(self, devices, discovered_at):
         snapshot = CameraInventorySnapshot(

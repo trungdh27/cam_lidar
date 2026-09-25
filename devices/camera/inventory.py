@@ -5,9 +5,10 @@ from datetime import datetime, timezone
 
 from devices.camera.discovery import (
     RealSenseCameraDiscoveryAdapter,
+    RosProductionCameraDiscoveryAdapter,
     ZedCameraDiscoveryAdapter,
 )
-from devices.camera.models import CameraDevice, CameraPhysicalStatus, UsbSpeed
+from devices.camera.models import CameraAccessMode, CameraDevice, CameraPhysicalStatus, UsbSpeed
 from devices.camera.ros_registry import RosCameraDriverRegistry
 
 
@@ -46,6 +47,8 @@ class CameraInventorySnapshot:
     adapter_warnings: dict[str, tuple[str, ...]]
     discovered_at: str
     ros2_available: bool | None = None
+    adapter_candidates: dict[str, tuple[CameraDevice, ...]] | None = None
+    raw_candidate_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +59,11 @@ class CameraInventorySnapshot:
             },
             "discovered_at": self.discovered_at,
             "ros2_available": self.ros2_available,
+            "adapter_candidates": {
+                name: [item.to_dict() for item in devices]
+                for name, devices in (self.adapter_candidates or {}).items()
+            },
+            "raw_candidate_count": self.raw_candidate_count,
         }
 
 
@@ -96,6 +104,21 @@ def merge_camera_devices(first: CameraDevice, second: CameraDevice) -> CameraDev
         ),
         richer.usb_speed or first.usb_speed or second.usb_speed,
     )
+    ros_observation = next((item for item in (second, first) if item.ros_available), None)
+    ros_owns_device = bool(
+        ros_observation
+        and ros_observation.busy
+        and ros_observation.metadata.get("metadata_complete")
+    )
+    direct_available = (
+        False if ros_owns_device
+        else any(item.direct_sdk_available is True for item in (first, second))
+    )
+    access_mode = (
+        CameraAccessMode.ROS_READ_ONLY if ros_owns_device and ros_observation.rgb_topic and ros_observation.stream_active
+        else CameraAccessMode.DIRECT_SDK if direct_available
+        else CameraAccessMode.UNAVAILABLE
+    )
     return replace(
         richer,
         physical_port=richer.physical_port or first.physical_port or second.physical_port,
@@ -103,6 +126,16 @@ def merge_camera_devices(first: CameraDevice, second: CameraDevice) -> CameraDev
         capabilities=capabilities,
         stream_profiles=profiles,
         physical_status=status,
+        physical_detected=first.physical_detected or second.physical_detected,
+        direct_sdk_available=direct_available,
+        ros_available=first.ros_available or second.ros_available,
+        ros_node=(ros_observation.ros_node if ros_observation else first.ros_node or second.ros_node),
+        device_info_topic=(ros_observation.device_info_topic if ros_observation else first.device_info_topic or second.device_info_topic),
+        rgb_topic=(ros_observation.rgb_topic if ros_observation else first.rgb_topic or second.rgb_topic),
+        access_mode=access_mode,
+        owner=(ros_observation.owner if ros_observation else first.owner or second.owner),
+        busy=ros_owns_device or not direct_available,
+        stream_active=bool(ros_observation and ros_observation.stream_active),
         discovery_source=" + ".join(dict.fromkeys((first.discovery_source, second.discovery_source))),
         discovery_errors=errors,
         metadata=metadata,
@@ -118,8 +151,39 @@ def deduplicate_camera_devices(devices) -> tuple[CameraDevice, ...]:
             )
         else:
             by_uid[device.device_uid] = device
+    # A device_info topic can exist without publishing a bounded sample. Keep
+    # that ROS observation, but attach it only when its namespace family maps
+    # to exactly one serial-bearing physical ZED candidate. This is enrichment,
+    # never model-only identity or a reason to discard physical hardware.
+    unresolved = []
+    for device in by_uid.values():
+        if device.serial or not device.ros_available:
+            unresolved.append(device)
+            continue
+        hint = str(device.metadata.get("ros_camera_name") or "").casefold()
+        # Preserve the family part before common instance suffixes, e.g.
+        # zed_x_one_s -> zed_x_one and zed_x_mini -> zed_x_mini.
+        if hint.startswith("zed_x_one"):
+            family_hint = "zed_x_one"
+        elif hint.startswith("zed_x_mini"):
+            family_hint = "zed_x_mini"
+        elif hint.startswith("zed_x"):
+            family_hint = "zed_x"
+        else:
+            unresolved.append(device)
+            continue
+        matches = [
+            item for item in unresolved
+            if item.serial and item.vendor.casefold() == "stereolabs"
+            and (item.normalized_model == family_hint or item.normalized_model.startswith(family_hint + "_"))
+        ]
+        if len(matches) == 1:
+            matched = matches[0]
+            unresolved[unresolved.index(matched)] = merge_camera_devices(matched, device)
+        else:
+            unresolved.append(device)
     return tuple(sorted(
-        by_uid.values(),
+        unresolved,
         key=lambda item: (item.vendor.casefold(), item.model.casefold(), item.serial),
     ))
 
@@ -129,7 +193,8 @@ class CameraInventory:
 
     def __init__(self, adapters=None, ros_registry=None, driver_probe=None):
         self.adapters = tuple(adapters or (
-            ZedCameraDiscoveryAdapter(), RealSenseCameraDiscoveryAdapter()
+            ZedCameraDiscoveryAdapter(), RealSenseCameraDiscoveryAdapter(),
+            RosProductionCameraDiscoveryAdapter(),
         ))
         self.ros_registry = ros_registry or RosCameraDriverRegistry()
         self.driver_probe = driver_probe or RosDriverPackageProbe()
@@ -140,11 +205,19 @@ class CameraInventory:
         devices = []
         errors = {}
         warnings = {}
+        candidates = {}
+        raw_candidate_count = 0
         for adapter in self.adapters:
             name = getattr(adapter, "name", type(adapter).__name__)
             try:
                 result = await adapter.discover(ssh)
                 devices.extend(result.devices)
+                candidates[name] = tuple(result.devices)
+                raw_candidate_count += (
+                    result.raw_candidate_count
+                    if result.raw_candidate_count is not None
+                    else len(result.devices)
+                )
                 if result.warnings:
                     warnings[name] = tuple(result.warnings)
             except Exception as exc:
@@ -171,6 +244,8 @@ class CameraInventory:
             adapter_warnings=warnings,
             discovered_at=datetime.now(timezone.utc).isoformat(),
             ros2_available=ros2_available,
+            adapter_candidates=candidates,
+            raw_candidate_count=raw_candidate_count,
         )
         self._devices = mapped
         self._snapshot = snapshot

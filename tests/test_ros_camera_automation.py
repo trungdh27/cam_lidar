@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import ast
+import asyncio
 import contextlib
 import io
 import json
@@ -16,6 +17,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QObject, Signal
 
 from core.testing import TestContext, TestEvaluator, TestRunner, TestStatus
+from core.testing.errors import RemoteOperationTimeoutError
 from core.testing.definitions import load_definitions
 from core.testing.registry import TestRegistry
 from desktop_app.workers.ros_camera_test_runner_worker import (
@@ -30,6 +32,7 @@ from devices.camera.ros_automation import (
 )
 from devices.camera.ros_automation.models import RosBagSession, RosNodeSession
 from devices.camera.ros_automation.jetson_ros_manager import JETSON_ROS_MANAGER
+from devices.camera.ros_automation.remote import RemoteRosCameraService, RosRemoteError
 from devices.camera.ros_automation.registry import (
     UnsupportedRosCameraAdapterError,
 )
@@ -299,6 +302,17 @@ class _Manager:
         }}
 
 
+class _GraphManager(_Manager):
+    """Adds a production graph without introducing a vendor launch package."""
+
+    def __init__(self, graph, **kwargs):
+        super().__init__(**kwargs)
+        self.graph = graph
+
+    def discover_camera_graph(self, _setup_files=(), _distro="humble"):
+        return self.graph
+
+
 def _embedded_qos_probe_source():
     tree = ast.parse(JETSON_ROS_MANAGER)
     for statement in tree.body:
@@ -539,27 +553,209 @@ class RosCameraHandlerTests(unittest.TestCase):
             self.definitions[test_id], context
         )
 
-    def test_ros001_package_requirement_from_selected_inventory(self):
+    def test_ros001_does_not_require_vendor_packages(self):
         manager = _Manager()
         result = self._run("ROS-001", [_zed()], manager)
         self.assertEqual(result.status, TestStatus.PASS)
-        self.assertEqual(manager.required_calls, [("zed_wrapper",)])
-        self.assertEqual(result.measurements["required_driver_count"], 1)
+        self.assertEqual(manager.required_calls, [()])
+        self.assertEqual(result.measurements["required_driver_count"], 0)
 
-    def test_ros001_all_cameras_uses_driver_union(self):
+    def test_ros001_all_cameras_remains_package_independent(self):
         manager = _Manager()
         result = self._run("ROS-001", [_zed(), _realsense()], manager)
         self.assertEqual(result.status, TestStatus.PASS)
-        self.assertEqual(
-            manager.required_calls,
-            [("realsense2_camera", "zed_wrapper")],
-        )
+        self.assertEqual(manager.required_calls, [()])
 
-    def test_unsupported_adapter_is_blocked(self):
+    def test_unknown_adapter_does_not_block_environment_discovery(self):
         device = replace(_zed("1"), ros_driver="unknown")
         result = self._run("ROS-001", [device], _Manager())
+        self.assertEqual(result.status, TestStatus.PASS)
+
+    def test_ros001_passes_with_custom_graph_and_no_vendor_packages(self):
+        device = replace(_zed(), rgb_topic="/front_camera/image_raw")
+        manager = _GraphManager({
+            "nodes": ["/production/custom_camera"],
+            "topics": {"/front_camera/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/front_camera/image_raw": 1},
+            "publisher_nodes": {"/front_camera/image_raw": ["/production/custom_camera"]},
+        }, installed={"zed_wrapper": False, "realsense2_camera": False})
+        result = self._run("ROS-001", [device], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertEqual(result.measurements["camera_candidate_count"], 1)
+        self.assertEqual(result.measurements["mapped_camera_count"], 1)
+        self.assertEqual(manager.required_calls, [()])
+
+    def test_ros001_passes_when_physical_to_graph_mapping_is_ambiguous(self):
+        manager = _GraphManager({
+            "nodes": [],
+            "topics": {
+                "/front/image_raw": ["sensor_msgs/msg/Image"],
+                "/rear/image_raw": ["sensor_msgs/msg/Image"],
+            },
+            "publisher_counts": {"/front/image_raw": 1, "/rear/image_raw": 1},
+            "publisher_nodes": {},
+        })
+        result = self._run("ROS-001", [_zed()], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertFalse(result.measurements["selected_cameras_mapped"])
+
+    def test_ros001_uses_graph_prerequisites_without_a_physical_identity(self):
+        manager = _GraphManager({
+            "nodes": ["/front/node"],
+            "topics": {"/front/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/front/image_raw": 1},
+            "publisher_nodes": {"/front/image_raw": ["/front/node"]},
+        })
+        result = self._run("ROS-001", [], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertEqual(result.measurements["camera_candidate_count"], 1)
+
+    def test_ros001_fails_when_graph_is_available_but_has_no_camera_publisher(self):
+        manager = _GraphManager({"nodes": ["/other"], "topics": {}, "publisher_counts": {}})
+        result = self._run("ROS-001", [_zed()], manager)
+        self.assertEqual(result.status, TestStatus.FAIL)
+
+    def test_ros001_fails_when_camera_image_topic_has_no_active_publisher(self):
+        manager = _GraphManager({
+            "nodes": ["/front/subscriber"],
+            "topics": {"/front/image": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/front/image": 0},
+            "publisher_nodes": {"/front/image": []},
+        })
+        result = self._run("ROS-001", [_zed()], manager)
+        self.assertEqual(result.status, TestStatus.FAIL)
+        self.assertEqual(result.measurements["camera_candidate_count"], 1)
+        self.assertFalse(result.measurements["camera_publishers_discovered"])
+
+    def test_ros002_and_ros003_use_mapped_external_graph_without_launching_a_driver(self):
+        device = replace(_zed(), rgb_topic="/custom/production/image_raw")
+        manager = _GraphManager({
+            "nodes": ["/custom/production/node"],
+            "topics": {"/custom/production/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/custom/production/image_raw": 1},
+            "publisher_nodes": {"/custom/production/image_raw": ["/custom/production/node"]},
+        })
+        self.assertEqual(self._run("ROS-002", [device], manager).status, TestStatus.PASS)
+        self.assertEqual(self._run("ROS-003", [device], manager).status, TestStatus.PASS)
+        self.assertEqual(manager.events, [])
+
+    def test_ros003_executes_for_unknown_mapping_but_ros002_is_blocked(self):
+        manager = _GraphManager({
+            "nodes": ["/custom/camera_node"],
+            "topics": {"/custom/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/custom/image_raw": 1},
+            "publisher_nodes": {"/custom/image_raw": ["/custom/camera_node"]},
+        })
+        self.assertEqual(self._run("ROS-002", [_zed()], manager).status, TestStatus.BLOCKED)
+        result = self._run("ROS-003", [_zed()], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertEqual(result.sub_results[0]["device_uid"], "ros:/custom")
+        self.assertEqual(result.sub_results[0]["mapping_confidence"], "UNKNOWN")
+        self.assertTrue(result.sub_results[0]["warnings"])
+        self.assertEqual(manager.events, [])
+
+    def test_ros003_executes_for_partial_mapping(self):
+        device = replace(_zed(), ros_namespace_hint="/custom")
+        manager = _GraphManager({
+            "nodes": ["/custom/node"],
+            "topics": {"/custom/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/custom/image_raw": 1},
+            "publisher_nodes": {"/custom/image_raw": ["/custom/node"]},
+        })
+        result = self._run("ROS-003", [device], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertEqual(result.sub_results[0]["mapping_confidence"], "PARTIAL")
+
+    def test_ros003_is_blocked_only_when_the_ros_graph_is_unavailable(self):
+        manager = _GraphManager({})
+
+        def unavailable(*_args):
+            raise RosRemoteError("ROS_GRAPH_UNAVAILABLE", "graph probe unavailable")
+
+        manager.discover_camera_graph = unavailable
+        result = self._run("ROS-003", [_zed()], manager)
         self.assertEqual(result.status, TestStatus.BLOCKED)
-        self.assertEqual(result.error["code"], "ROS_ADAPTER_UNSUPPORTED")
+        self.assertEqual(result.error["code"], "ROS_GRAPH_UNAVAILABLE")
+
+    def test_ros003_executes_all_candidates_when_multiple_mappings_are_partial(self):
+        manager = _GraphManager({
+            "nodes": ["/front/node", "/rear/node"],
+            "topics": {
+                "/front/image_raw": ["sensor_msgs/msg/Image"],
+                "/rear/image_raw": ["sensor_msgs/msg/Image"],
+            },
+            "publisher_counts": {"/front/image_raw": 1, "/rear/image_raw": 1},
+            "publisher_nodes": {
+                "/front/image_raw": ["/front/node"],
+                "/rear/image_raw": ["/rear/node"],
+            },
+        })
+        result = self._run("ROS-003", [_zed(), _realsense()], manager)
+        self.assertEqual(result.status, TestStatus.PASS)
+        self.assertEqual(len(result.sub_results), 2)
+
+    def test_graph_only_cases_continue_when_identity_mapping_is_unknown(self):
+        graph = {
+            "nodes": ["/front/node"],
+            "topics": {
+                "/front/image_raw": ["sensor_msgs/msg/Image"],
+                "/front/camera_info": ["sensor_msgs/msg/CameraInfo"],
+                "/front/imu": ["sensor_msgs/msg/Imu"],
+            },
+            "publisher_counts": {
+                "/front/image_raw": 1,
+                "/front/camera_info": 1,
+                "/front/imu": 1,
+            },
+            "publisher_nodes": {
+                "/front/image_raw": ["/front/node"],
+                "/front/camera_info": ["/front/node"],
+                "/front/imu": ["/front/node"],
+            },
+        }
+        for test_id in ("ROS-003", "ROS-004", "ROS-005", "ROS-006", "ROS-007", "ROS-008"):
+            with self.subTest(test_id=test_id):
+                result = self._run(test_id, [_zed()], _GraphManager(graph))
+                self.assertNotEqual(result.status, TestStatus.BLOCKED)
+
+    def test_camera_info_and_sensor_absence_are_reported_not_applicable(self):
+        graph = {
+            "nodes": ["/rgb_only/camera_node"],
+            "topics": {"/rgb_only/image": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/rgb_only/image": 1},
+            "publisher_nodes": {"/rgb_only/image": ["/rgb_only/camera_node"]},
+        }
+        camera_info_result = self._run("ROS-005", [_zed()], _GraphManager(graph))
+        self.assertEqual(camera_info_result.status, TestStatus.PASS)
+        self.assertEqual(
+            camera_info_result.sub_results[0]["measurements"]["capability_status"],
+            "NOT_APPLICABLE",
+        )
+        sensor_result = self._run("ROS-006", [_zed()], _GraphManager(graph))
+        self.assertEqual(sensor_result.status, TestStatus.PASS)
+        self.assertEqual(
+            sensor_result.sub_results[0]["measurements"]["capability_status"],
+            "NOT_APPLICABLE",
+        )
+
+    def test_ros003_fails_for_a_discovered_candidate_with_zero_runtime_publishers(self):
+        def collection(_session, spec, topics, sample_count):
+            requirement = topics[0]
+            topic = requirement.topic(spec.namespace)
+            return {"topics": {topic: {
+                "exists": True, "type": requirement.message_type,
+                "type_matches": True, "publisher_count": 0,
+                "message_received": False, "sample_count": 0,
+                "valid_sample_count": 0,
+            }}}
+
+        manager = _GraphManager({
+            "nodes": ["/front/node"],
+            "topics": {"/front/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/front/image_raw": 1},
+            "publisher_nodes": {"/front/image_raw": ["/front/node"]},
+        }, collection=collection)
+        self.assertEqual(self._run("ROS-003", [_zed()], manager).status, TestStatus.FAIL)
 
     def test_camera_busy_is_blocked(self):
         result = self._run(
@@ -1142,6 +1338,59 @@ class RosTargetSnapshotTests(unittest.TestCase):
         )
         selected.append(_zed("222"))
         self.assertEqual([item.serial for item in worker.devices], ["111"])
+
+
+class RosRuntimeDiagnosticsTests(unittest.TestCase):
+    def test_embedded_jetson_manager_compiles(self):
+        compile(JETSON_ROS_MANAGER, "<jetson_ros_manager>", "exec")
+
+    def test_remote_ssh_timeout_keeps_operation_timeout_and_duration(self):
+        class TimeoutSsh:
+            async def run(self, _command, timeout):
+                raise TimeoutError(f"timed out after {timeout}")
+
+        with self.assertRaises(RosRemoteError) as captured:
+            asyncio.run(RemoteRosCameraService().execute_with_ssh(
+                TimeoutSsh(), "environment", {"remote_timeout_s": 12}
+            ))
+        error = captured.exception
+        self.assertEqual(error.code, "ROS_REMOTE_TIMEOUT")
+        self.assertEqual(error.payload["operation"], "environment")
+        self.assertEqual(error.payload["timeout_s"], 12)
+        self.assertIn("duration_s", error.payload)
+
+    def test_environment_operation_deadline_is_blocked_not_internal_error(self):
+        class TimedManager(_Manager):
+            def probe_environment(self, _packages, _expected_distro="humble"):
+                error = RemoteOperationTimeoutError("environment remote deadline elapsed")
+                error.diagnostics = {"operation": "camera_ros_environment", "timeout_s": 15}
+                raise error
+
+        result = self._run("ROS-001", [_zed()], TimedManager())
+        self.assertEqual(result.status, TestStatus.BLOCKED)
+        self.assertEqual(result.error["code"], "ROS_ENVIRONMENT_TIMEOUT")
+        self.assertEqual(result.error["diagnostics"]["timeout_s"], 15)
+
+    def test_ros002_ambiguous_identity_is_blocked_and_does_not_poison_ros003(self):
+        manager = _GraphManager({
+            "nodes": ["/custom/camera_node"],
+            "topics": {"/custom/image_raw": ["sensor_msgs/msg/Image"]},
+            "publisher_counts": {"/custom/image_raw": 1},
+            "publisher_nodes": {"/custom/image_raw": ["/custom/camera_node"]},
+        })
+        blocked = self._run("ROS-002", [_zed()], manager)
+        later = self._run("ROS-003", [_zed()], manager)
+        self.assertEqual(blocked.status, TestStatus.BLOCKED)
+        self.assertEqual(later.status, TestStatus.PASS)
+
+    def _run(self, test_id, devices, manager):
+        # Reuse the suite fixture's normal registration/configuration.
+        suite = RosCameraHandlerTests(methodName="test_ros001_does_not_require_vendor_packages")
+        suite.setUp()
+        try:
+            return suite._run(test_id, devices, manager)
+        finally:
+            suite.tearDown()
 
 
 if __name__ == "__main__":

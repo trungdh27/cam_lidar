@@ -11,7 +11,16 @@
       "startup_timeout_s": 25,
       "warmup_s": 1,
       "sample_count": 5,
-      "collection_timeout_s": 8
+      "collection_timeout_s": 8,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}
@@ -30,7 +39,16 @@
       "startup_timeout_s": 25,
       "warmup_s": 1,
       "sample_count": 20,
-      "collection_timeout_s": 8
+      "collection_timeout_s": 8,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": true,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}
@@ -49,7 +67,16 @@
       "startup_timeout_s": 25,
       "graph_discovery_timeout_s": 5,
       "sample_count": 3,
-      "subscriber_timeout_s": 8
+      "subscriber_timeout_s": 8,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}
@@ -75,7 +102,16 @@
       "replay_startup_timeout_s": 8,
       "replay_timeout_s": 12,
       "replay_sample_count": 1,
-      "cleanup_timeout_s": 8
+      "cleanup_timeout_s": 8,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}

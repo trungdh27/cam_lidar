@@ -1,8 +1,10 @@
+import base64
 import html
+import time
 from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSplitter,
+    QSizePolicy,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -29,8 +32,10 @@ from desktop_app.services.jetson_connection_service import (
 )
 from desktop_app.services.camera_inventory_service import CameraInventoryService
 from desktop_app.controllers.camera_stream_controller import CameraStreamController
+from desktop_app.controllers.ros_camera_monitor_controller import RosCameraMonitorController
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.widgets import Card, StatusChip
+from desktop_app.ui.camera_controls import ClickWheelComboBox
 from desktop_app.workers.camera_connection_worker import CameraConnectionWorker
 from desktop_app.workers.camera_discovery_worker import CameraDiscoveryWorker
 from desktop_app.workers.camera_worker import CameraActionWorker
@@ -40,11 +45,12 @@ from desktop_app.workers.gstreamer_preview_receiver import (
     inspect_host_gstreamer,
 )
 from devices.camera.inventory import CameraTargetSelection
-from devices.camera.models import CameraConnectionState
+from devices.camera.models import CameraAccessMode, CameraConnectionState
 from devices.camera.service import CameraService
 from devices.camera.preview_config import (
     H264_PREVIEW_PORT, PREVIEW_HEIGHT, PREVIEW_MODE, PREVIEW_PORT, PREVIEW_WIDTH,
 )
+from devices.camera.profiles import profile_id_for_camera
 from core.testing.definitions import load_definitions
 from core.testing.registry import TestRegistry
 from devices.camera.testing import register_camera_handlers
@@ -95,6 +101,13 @@ class CameraPage(QWidget):
     tests_requested = Signal(list)
     shutdown_ready = Signal()
 
+    # Keep the Monitor overview useful without allowing its long metadata table
+    # to consume the height intended for the live-monitoring controls and log.
+    # The table remains scrollable for the rest of the runtime metadata.
+    # The first five identity/driver fields are the useful at-a-glance view;
+    # remaining runtime fields stay available through the table's scrollbar.
+    COMPACT_OVERVIEW_VISIBLE_ROWS = 5
+
     def __init__(
         self,
         jetson_state: JetsonState,
@@ -127,6 +140,13 @@ class CameraPage(QWidget):
         self._stable_fps_samples = 0
         self._stable_fps_logged = False
         self.preview_receiver = None
+        self._monitor_access_mode = CameraAccessMode.UNAVAILABLE
+        self._ros_monitor_device = None
+        self._ros_monitor_started_at = None
+        self._ros_monitor_frame_count = 0
+        self._ros_monitor_last_timestamp = None
+        self._runtime_stream_profiles = {}
+        self._synchronizing_device_profile = False
         self.preview_state = "OFF"
         self.preview_frames_received = 0
         self.preview_frames_displayed = 0
@@ -149,12 +169,19 @@ class CameraPage(QWidget):
         self._selected_ros_test_id = None
         self._inventory_expanded = False
         self._ros_log_entries = []
+        self._last_ros_camera_graph = {}
+        self._ros_graph_accessible = None
         self._ros_environment_values = {
+            "Jetson Hostname": "NOT CHECKED",
             "ROS Distro": "NOT CHECKED",
             "ROS Environment": "NOT CHECKED",
-            "zed_wrapper": "NOT CHECKED",
-            "realsense2_camera": "NOT CHECKED",
             "Workspace": "NOT CHECKED",
+            "ROS Nodes": "NOT CHECKED",
+            "ROS Topics": "NOT CHECKED",
+            "Camera Candidates": "NOT CHECKED",
+            "Physical Cameras": "NOT CHECKED",
+            "Mapped Cameras": "NOT CHECKED",
+            "Unmapped Cameras": "NOT CHECKED",
             "Last Check": "NEVER",
         }
         self._ros_environment_dialog = None
@@ -180,6 +207,9 @@ class CameraPage(QWidget):
             self._ros_test_definition_error = str(exc)
         self.stream_controller = CameraStreamController(
             self.jetson_service, self.camera_service, self
+        )
+        self.ros_monitor_controller = RosCameraMonitorController(
+            self.jetson_service, self
         )
 
         self._build_ui()
@@ -211,6 +241,9 @@ class CameraPage(QWidget):
         self.stream_controller.metrics_received.connect(self._update_monitor)
         self.stream_controller.failed.connect(self._on_stream_failed)
         self.stream_controller.preview_fallback_ready.connect(self._start_jpeg_fallback)
+        self.ros_monitor_controller.sample_received.connect(self._on_ros_monitor_sample)
+        self.ros_monitor_controller.failed.connect(self._on_ros_monitor_failed)
+        self.ros_monitor_controller.stopped.connect(self._on_ros_monitor_stopped)
         self._on_jetson_state_changed(self.jetson_state)
 
     def _build_ui(self):
@@ -275,8 +308,12 @@ class CameraPage(QWidget):
         layout.setSpacing(10)
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
-        top_row.addWidget(self._build_device_card(), 1)
-        top_row.addWidget(self._build_overview_card(), 1)
+        top_row.addWidget(
+            self._build_device_card(), 1, Qt.AlignmentFlag.AlignTop
+        )
+        top_row.addWidget(
+            self._build_overview_card(), 1, Qt.AlignmentFlag.AlignTop
+        )
         layout.addLayout(top_row)
 
         middle_row = QHBoxLayout()
@@ -285,7 +322,11 @@ class CameraPage(QWidget):
         middle_row.addWidget(self._build_monitor_card(), 1)
         middle_row.addWidget(self._build_preview_card(), 2)
         layout.addLayout(middle_row)
-        layout.addWidget(self._build_automation_summary_card())
+        # The dedicated Automated Tests subpage owns all test status UI.
+        # Let the monitor log consume the reclaimed vertical space instead.
+        # The log is the sole expanding Monitor row.  The top and middle rows
+        # stop at their content-derived heights, so remaining vertical space is
+        # assigned to the log rather than becoming a gap beneath a top card.
         layout.addWidget(self._build_log_card(), 1)
         return page
 
@@ -342,7 +383,7 @@ class CameraPage(QWidget):
         self.inventory_discover_button.setObjectName("PrimaryButton")
         self.ros_environment_details_button = QPushButton("ENVIRONMENT DETAILS")
         self.ros_environment_status_label = QLabel("ROS NOT CHECKED")
-        self.ros_driver_status_label = QLabel("Driver UNKNOWN")
+        self.ros_driver_status_label = QLabel("Graph Discovery UNKNOWN")
         self.ros_camera_status_label = QLabel("Camera UNKNOWN")
         self.ros_runner_status_label = QLabel("Runner IDLE")
         self.ros_node_status_label = self.ros_camera_status_label
@@ -743,19 +784,45 @@ class CameraPage(QWidget):
             inventory_state = "Ready" if devices else "No cameras detected"
         self.inventory_state_label.setText(inventory_state)
         self._populate_target_camera_selector(devices)
+        self._populate_monitor_camera_selector(devices)
         self._populate_inventory_table(devices)
         self._sync_inventory_detail_after_refresh(devices)
         self._refresh_ros_table_targets()
         self._update_ros_status(snapshot)
         if not snapshot.adapter_errors:
             self._set_inventory_expanded(False)
+        adapter_candidates = snapshot.adapter_candidates or {}
+        for adapter, candidates in adapter_candidates.items():
+            candidates = tuple(candidates)
+            if adapter == "production_ros":
+                groups = {}
+                for candidate in candidates:
+                    source_name = "ZED ROS discovery" if candidate.family == "ZED" else "Production ROS discovery"
+                    groups.setdefault(source_name, []).append(candidate)
+                if not groups:
+                    self.append_log("WARNING", "Production ROS discovery returned 0 candidates.")
+                for source_name, source_candidates in groups.items():
+                    self.append_log("INFO", f"{source_name}: {len(source_candidates)} candidate(s).")
+                    for candidate in source_candidates:
+                        self._log_camera_candidate(source_name, candidate)
+            else:
+                source_name = {"zed": "ZED physical discovery", "realsense": "RealSense discovery"}.get(adapter, adapter)
+                level = "INFO" if candidates else "WARNING"
+                self.append_log(level, f"{source_name} returned {len(candidates)} candidate(s).")
+                for candidate in candidates:
+                    self._log_camera_candidate(source_name, candidate)
         for adapter, error in snapshot.adapter_errors.items():
             self._append_ros_log(
                 "WARNING", f"{adapter} discovery unavailable: {error}"
             )
+            self.append_log("WARNING", f"{adapter} discovery unavailable: {error}")
         for adapter, warnings in snapshot.adapter_warnings.items():
             for warning in warnings:
                 self._append_ros_log("WARNING", f"{adapter}: {warning}")
+        self.append_log("INFO", "Camera inventory reconciliation complete.")
+        self.append_log("INFO", f"Raw candidates: {snapshot.raw_candidate_count}")
+        self.append_log("INFO", f"Unique cameras: {len(devices)}")
+        self.append_log("INFO", f"Final camera inventory: {len(devices)} device(s).")
         family_counts = {}
         for device in devices:
             family_counts[device.family] = family_counts.get(device.family, 0) + 1
@@ -763,6 +830,11 @@ class CameraPage(QWidget):
             self._append_ros_log(
                 "INFO",
                 f"{device.model} SN{device.serial or '-'} detected via {transport}.",
+            )
+            self.append_log(
+                "INFO",
+                f"Final camera: {device.vendor} {device.model} SN{device.serial or '-'} "
+                f"access={device.access_mode.value} source={device.discovery_source}",
             )
             if device.usb_speed is not None:
                 self._append_ros_log(
@@ -772,8 +844,22 @@ class CameraPage(QWidget):
                 self._append_ros_log(
                     "INFO", f"ROS mapping: {device.model} -> {device.ros_driver}."
                 )
+            if device.ros_available:
+                self.append_log("INFO", "Production ROS camera detected.")
+                self.append_log("INFO", f"Model: {device.model}")
+                self.append_log("INFO", f"Serial: {device.serial or '-'}")
+                if device.ros_node:
+                    self.append_log("INFO", f"ROS node: {device.ros_node}")
+                if device.rgb_topic:
+                    self.append_log("INFO", f"RGB topic: {device.rgb_topic}")
+                if device.busy:
+                    self.append_log("WARNING", "Direct SDK access unavailable; camera is in use.")
+                self.append_log("INFO", f"Camera registered in {device.access_mode.value.replace('_', ' ')} mode.")
             for warning in device.discovery_errors:
                 self._append_ros_log(
+                    "WARNING", f"{device.model} SN{device.serial or '-'}: {warning}"
+                )
+                self.append_log(
                     "WARNING", f"{device.model} SN{device.serial or '-'}: {warning}"
                 )
         for family, count in family_counts.items():
@@ -783,6 +869,135 @@ class CameraPage(QWidget):
         self._append_ros_log(
             "INFO", f"Camera inventory complete: {len(devices)} device(s)."
         )
+        if self.connection_state == CameraConnectionState.DISCOVERING:
+            self._set_state(CameraConnectionState.DISCONNECTED)
+        selected = self._selected_monitor_device()
+        if selected and selected.access_mode == CameraAccessMode.ROS_READ_ONLY:
+            self.connection_status_label.setText("DISCOVERED VIA ROS")
+            self.device_chip.set_state("ok", "Device Detected")
+            self.stream_chip.set_state("ok", "ROS Stream Active")
+        if selected is not None:
+            profile_id = profile_id_for_camera(selected)
+            self.append_log("INFO", f"Selected camera: {selected.model} / SN{selected.serial or '-'}")
+            self.append_log("INFO", f"Active profile: {self.model_combo.currentText() if profile_id else 'No compatible profile'}")
+            self.append_log("INFO", f"Supported resolutions: {[self.resolution_combo.itemText(index) for index in range(self.resolution_combo.count())]}")
+            self.append_log("INFO", f"Supported FPS: {[self.fps_combo.itemText(index) for index in range(self.fps_combo.count())]}")
+        self.append_log("INFO", "Auto discovery complete.")
+
+    def _log_camera_candidate(self, source_name, device):
+        label = "ZED candidate" if source_name.startswith("ZED physical") else "Camera candidate"
+        self.append_log(
+            "INFO",
+            f"{label}: source={source_name}; vendor={device.vendor}; "
+            f"model={device.model}; serial={device.serial or '-'}; "
+            f"state={device.metadata.get('state', '-')}; transport={device.transport.value}; "
+            f"path={device.physical_port or '-'}; port={device.metadata.get('port', '-')}; "
+            f"node={device.ros_node or '-'}; device_info={device.device_info_topic or '-'}; "
+            f"access={device.access_mode.value}; busy={'YES' if device.busy else 'NO'}.",
+        )
+
+    def _selected_monitor_device(self):
+        device_uid = self.device_combo.currentData() if hasattr(self, "device_combo") else None
+        return self.camera_inventory_service.get_device(device_uid) if device_uid else None
+
+    def _populate_monitor_camera_selector(self, devices):
+        """Use the shared inventory for monitor selection as well as ROS tests."""
+        if not hasattr(self, "device_combo"):
+            return
+        previous_uid = self.device_combo.currentData()
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        selected_index = -1
+        for index, device in enumerate(devices):
+            self.device_combo.addItem(
+                f"{device.model} / SN{device.serial or '-'}", device.device_uid
+            )
+            if device.device_uid == previous_uid:
+                selected_index = index
+        if selected_index < 0 and devices:
+            selected_index = 0
+        self.device_combo.setCurrentIndex(selected_index)
+        self.device_combo.blockSignals(False)
+        if selected_index >= 0:
+            self._apply_monitor_device(devices[selected_index])
+
+    def _apply_monitor_device(self, device):
+        self._monitor_access_mode = device.access_mode
+        self._ros_monitor_device = device if device.access_mode == CameraAccessMode.ROS_READ_ONLY else None
+        profile_id = profile_id_for_camera(device)
+        self._synchronizing_device_profile = True
+        try:
+            profile_index = self.model_combo.findData(profile_id)
+            self.model_combo.blockSignals(True)
+            self.model_combo.setCurrentIndex(profile_index)
+            self.model_combo.blockSignals(False)
+            self._clear_stream_configuration()
+            if profile_id is None:
+                self.append_log(
+                    "WARNING",
+                    f"No compatible monitor profile is defined for {device.model}; stream configuration cleared.",
+                )
+            elif device.stream_profiles:
+                self._load_runtime_stream_capabilities(device)
+            else:
+                self._load_stream_capabilities(profile_id)
+        finally:
+            self._synchronizing_device_profile = False
+        self._set_overview_from_inventory(device)
+
+    def _clear_stream_configuration(self):
+        self._runtime_stream_profiles = {}
+        for combo in (self.resolution_combo, self.fps_combo, self.format_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.blockSignals(False)
+        self._reset_stream_metrics("--")
+
+    def _load_runtime_stream_capabilities(self, device):
+        """Populate controls from the selected device's reported profiles only."""
+        profiles = tuple(item for item in device.stream_profiles if item.width and item.height)
+        if not profiles:
+            self._load_stream_capabilities(profile_id_for_camera(device))
+            return
+        grouped = {}
+        for item in profiles:
+            key = (item.width, item.height)
+            current = grouped.setdefault(key, {"fps": set(), "formats": set()})
+            if item.fps:
+                current["fps"].add(int(item.fps))
+            if item.format:
+                current["formats"].add(str(item.format))
+        self.resolution_combo.blockSignals(True)
+        for index, ((width, height), values) in enumerate(grouped.items()):
+            key = f"runtime:{index}"
+            self._runtime_stream_profiles[key] = (width, height, values)
+            self.resolution_combo.addItem(f"Runtime {width} x {height}", key)
+        self.resolution_combo.blockSignals(False)
+        self._update_stream_options()
+
+    def _set_overview_from_inventory(self, device):
+        metadata = device.metadata
+        self._set_overview({
+            "Model": device.model,
+            "Detected SDK Model": metadata.get("sdk_model") or device.model,
+            "Serial Number": device.serial or "-",
+            "Vendor": device.vendor,
+            "Driver": metadata.get("driver_name") or device.sdk_backend or "-",
+            "Driver Version": metadata.get("driver_version") or "-",
+            "Input Type": metadata.get("input_type") or device.transport.value,
+            "Firmware": metadata.get("firmware_version") or "-",
+            "Resolution": metadata.get("resolution") or "-",
+            "Configured / Target FPS": metadata.get("target_fps") or "-",
+            "ROS Node": device.ros_node or "-",
+            "RGB Topic": device.rgb_topic or "-",
+            "Access Mode": device.access_mode.value.replace("_", " "),
+            "Direct SDK": "IN USE" if device.busy else ("AVAILABLE" if device.direct_sdk_available else "UNAVAILABLE"),
+            "ROS Stream": "ACTIVE" if device.stream_active else "NOT ACTIVE",
+            "Physical State": "DETECTED" if device.physical_detected else "UNKNOWN",
+            "Physical Path": device.physical_port or "-",
+            "Port": metadata.get("port") or "-",
+            "Camera State": "DETECTED" if device.physical_detected else "UNKNOWN",
+        })
 
     def _on_inventory_discovery_failed(self, error):
         self.inventory_discover_button.setText("DISCOVER ALL")
@@ -799,6 +1014,11 @@ class CameraPage(QWidget):
             return
         self._populate_inventory_table(())
         self._populate_target_camera_selector(())
+        if hasattr(self, "device_combo"):
+            self.device_combo.clear()
+            self.device_combo.addItem("Auto discover required", None)
+        self._monitor_access_mode = CameraAccessMode.UNAVAILABLE
+        self._ros_monitor_device = None
         self._refresh_ros_table_targets()
         self.inventory_count_label.setText("0 Detected")
         self.inventory_state_label.setText("BLOCKED — Jetson disconnected")
@@ -871,6 +1091,53 @@ class CameraPage(QWidget):
             name for name, available in device.capabilities.items() if available
         ) or "-"
         warnings = "\n".join(f"  {value}" for value in device.discovery_errors) or "  -"
+        graph = self._last_ros_camera_graph or {}
+        associations = graph.get("associations") or []
+        association = next(
+            (item for item in associations if item.get("device_uid") == device.device_uid),
+            {},
+        )
+        candidates = graph.get("camera_candidates") or []
+        endpoint = next(
+            (item for item in candidates
+             if item.get("namespace") == association.get("namespace")),
+            {},
+        )
+        graph_camera_summary = "; ".join(
+            f"{item.get('namespace')}: nodes={','.join(item.get('nodes') or []) or '-'}; "
+            f"Image={','.join(item.get('image_topics') or item.get('compressed_image_topics') or []) or '-'}; "
+            f"CameraInfo={','.join(item.get('camera_info_topics') or []) or '-'}; "
+            f"Depth={','.join(item.get('depth_topics') or []) or '-'}; "
+            f"IMU={','.join(item.get('imu_topics') or []) or '-'}; "
+            f"Temperature={','.join(item.get('temperature_topics') or []) or '-'}; "
+            f"PointCloud={','.join(item.get('pointcloud_topics') or []) or '-'}"
+            for item in candidates
+        ) or "-"
+        graph_qos_summary = "; ".join(
+            f"{topic}: " + ", ".join(
+                f"{record.get('node_namespace') or '-'}/{record.get('node_name') or '-'} "
+                f"{record.get('reliability', 'UNKNOWN')}/{record.get('durability', 'UNKNOWN')} "
+                f"{record.get('history', 'UNKNOWN')} depth={record.get('depth', 0)}"
+                for record in records
+            )
+            for candidate in candidates
+            for topic, records in (candidate.get("publisher_metadata") or {}).items()
+            if records
+        ) or "-"
+        dynamic_topics = {
+            "ROS Namespace": endpoint.get("namespace") or device.ros_namespace_hint or "-",
+            "ROS Graph Nodes": ", ".join(endpoint.get("nodes") or []) or device.ros_node or "-",
+            "Image": ", ".join(endpoint.get("image_topics") or ([device.rgb_topic] if device.rgb_topic else [])) or "-",
+            "CameraInfo": ", ".join(endpoint.get("camera_info_topics") or []) or "-",
+            "Depth": ", ".join(endpoint.get("depth_topics") or []) or "-",
+            "IMU": ", ".join(endpoint.get("imu_topics") or []) or "-",
+            "Temperature": ", ".join(endpoint.get("temperature_topics") or []) or "-",
+            "PointCloud": ", ".join(endpoint.get("pointcloud_topics") or []) or "-",
+            "Mapping Confidence": association.get("confidence") or "UNKNOWN",
+            "Mapping Evidence": ", ".join(association.get("evidence") or []) or "-",
+            "Discovered ROS Candidates": graph_camera_summary,
+            "ROS Publisher QoS": graph_qos_summary,
+        }
         self.inventory_detail_text.setPlainText(
             f"Device UID: {device.device_uid}\nVendor: {device.vendor}\n"
             f"Model: {device.model}\nSerial: {device.serial or '-'}\n"
@@ -879,6 +1146,18 @@ class CameraPage(QWidget):
             f"SDK Backend: {device.sdk_backend or '-'}\nROS Driver: {device.ros_driver or '-'}\n"
             f"ROS Camera Model: {device.ros_camera_model or '-'}\n"
             f"Suggested Namespace: {device.ros_namespace_hint or '-'}\n"
+            f"Physical Detected: {'YES' if device.physical_detected else 'NO'}\n"
+            f"Direct SDK: {'IN USE' if device.busy else ('AVAILABLE' if device.direct_sdk_available else 'UNAVAILABLE')}\n"
+            f"Production ROS: {'ACTIVE' if device.ros_available else 'NOT DETECTED'}\n"
+            f"ROS Node: {device.ros_node or '-'}\n"
+            f"Device Info Topic: {device.device_info_topic or '-'}\n"
+            f"RGB Topic: {device.rgb_topic or '-'}\n"
+            + "".join(f"{name}: {value}\n" for name, value in dynamic_topics.items())
+            +
+            f"Access Mode: {device.access_mode.value.replace('_', ' ')}\n"
+            f"Owner: {device.owner or '-'}\n"
+            f"ROS Stream: {'ACTIVE' if device.stream_active else 'NOT ACTIVE'}\n"
+            f"Availability Classification: {device.metadata.get('availability_classification', '-')}\n"
             f"Capabilities: {capabilities}\nROS Readiness: {device.ros_readiness.value}\n"
             f"Discovery Warnings:\n{warnings}"
         )
@@ -921,24 +1200,6 @@ class CameraPage(QWidget):
             message = "Jetson is disconnected. Connect from Dashboard first."
         self.inventory_empty_label.setText(message)
 
-    @staticmethod
-    def _aggregate_driver_readiness(devices):
-        statuses = {device.ros_readiness.value for device in devices}
-        if not statuses:
-            return "UNKNOWN"
-        if statuses == {"READY"}:
-            return "READY"
-        if "DRIVER_MISSING" in statuses:
-            return "DRIVER_MISSING"
-        if len(statuses) > 1:
-            return "PARTIAL"
-        return next(iter(statuses))
-
-    @staticmethod
-    def _driver_package_status(devices, package):
-        matching = [device for device in devices if device.ros_driver == package]
-        return CameraPage._aggregate_driver_readiness(matching)
-
     def _update_ros_status(self, snapshot=None):
         snapshot = snapshot or self.camera_inventory_service.inventory.snapshot
         devices = tuple(snapshot.devices)
@@ -952,16 +1213,9 @@ class CameraPage(QWidget):
             environment = "NOT AVAILABLE"
         else:
             environment = "UNKNOWN"
-        driver = self._aggregate_driver_readiness(devices)
         environment_state = (
             "ok" if environment == "AVAILABLE" else
             "error" if environment in {"DISCONNECTED", "NOT AVAILABLE"} else
-            "idle"
-        )
-        driver_state = (
-            "ok" if driver == "READY" else
-            "error" if driver == "DRIVER_MISSING" else
-            "warning" if driver == "PARTIAL" else
             "idle"
         )
         camera_ready = bool(devices) and all(
@@ -972,14 +1226,14 @@ class CameraPage(QWidget):
             "ROS " + environment,
             environment_state,
         )
-        selected_drivers = sorted(
-            {device.ros_driver for device in devices if device.ros_driver}
+        graph_state = self._ros_graph_accessible
+        self._set_ros_badge(
+            self.ros_driver_status_label,
+            "Graph Discovery READY" if graph_state is True else
+            "Graph Discovery UNAVAILABLE" if graph_state is False else
+            "Graph Discovery UNKNOWN",
+            "ok" if graph_state is True else "error" if graph_state is False else "idle",
         )
-        driver_text = (
-            f"{selected_drivers[0]} {driver}"
-            if len(selected_drivers) == 1 else f"Drivers {driver}"
-        )
-        self._set_ros_badge(self.ros_driver_status_label, driver_text, driver_state)
         self._set_ros_badge(
             self.ros_camera_status_label,
             "Camera READY" if camera_ready else "Camera NOT READY",
@@ -987,10 +1241,6 @@ class CameraPage(QWidget):
         )
         self._ros_environment_values.update({
             "ROS Environment": environment,
-            "zed_wrapper": self._driver_package_status(devices, "zed_wrapper"),
-            "realsense2_camera": self._driver_package_status(
-                devices, "realsense2_camera"
-            ),
             "Last Check": snapshot.discovered_at or "NEVER",
         })
         self._update_open_ros_environment_dialog()
@@ -1002,28 +1252,13 @@ class CameraPage(QWidget):
         self.ros_automation_tab_button.setChecked(index == 2)
         self._refresh_runner_status()
 
-    def _build_automation_summary_card(self):
-        card = Card("Automated Tests")
-        row = QHBoxLayout()
-        self.automation_runner_label = QLabel("Runner: IDLE")
-        row.addWidget(self.automation_runner_label)
-        self.automation_summary_label = QLabel("Total 0  |  PASS 0  |  FAIL 0  |  ERROR 0  |  BLOCKED 0  |  NOT RUN 0")
-        self.automation_summary_label.setObjectName("Muted")
-        row.addWidget(self.automation_summary_label)
-        row.addStretch()
-        open_button = QPushButton("OPEN TEST MANAGER")
-        open_button.setObjectName("OutlineButton")
-        open_button.clicked.connect(lambda: self._set_camera_subpage(1))
-        self.open_test_manager_button = open_button
-        row.addWidget(open_button)
-        card.body_layout.addLayout(row)
-        return card
-
     def _build_device_card(self):
         card = Card("Camera Device")
+        self.camera_device_card = card
+        self._make_monitor_card_compact(card)
         grid = QGridLayout()
         grid.addWidget(QLabel("Model:"), 0, 0)
-        self.model_combo = QComboBox()
+        self.model_combo = ClickWheelComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_profile_changed)
         grid.addWidget(self.model_combo, 0, 1, 1, 3)
 
@@ -1054,25 +1289,60 @@ class CameraPage(QWidget):
 
     def _build_overview_card(self):
         card = Card("Device Overview")
+        self.device_overview_card = card
+        self._make_monitor_card_compact(card)
         overview_fields = (
-            "Model", "SDK Model", "Serial Number", "Interface",
-            "Execution Host", "Resolution", "FPS", "Camera State",
+            "Model", "Detected SDK Model", "Serial Number", "Vendor", "Driver", "Driver Version",
+            "Input Type", "Firmware", "Resolution", "Configured / Target FPS",
+            "ROS Node", "RGB Topic", "Access Mode", "Direct SDK", "ROS Stream",
+            "Physical State", "Physical Path", "Port", "Camera State",
         )
         self.overview_table = QTableWidget(len(overview_fields), 2)
         self.overview_table.setHorizontalHeaderLabels(["Parameter", "Value"])
         self._configure_read_only_table(self.overview_table)
+        self.overview_table.verticalHeader().setDefaultSectionSize(20)
         self.overview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.overview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.overview_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.overview_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         for row, name in enumerate(overview_fields):
             self.overview_table.setItem(row, 0, QTableWidgetItem(name))
             self.overview_table.setItem(row, 1, QTableWidgetItem("-"))
+        visible_rows = min(
+            self.COMPACT_OVERVIEW_VISIBLE_ROWS, self.overview_table.rowCount()
+        )
+        table_height = (
+            self.overview_table.horizontalHeader().sizeHint().height()
+            + visible_rows * self.overview_table.verticalHeader().defaultSectionSize()
+            + 2 * self.overview_table.frameWidth()
+        )
+        self.overview_table.setMaximumHeight(table_height)
         card.body_layout.addWidget(self.overview_table)
         return card
+
+    @staticmethod
+    def _make_monitor_card_compact(card):
+        """Tighten only the two dense Monitor header cards.
+
+        Other Camera sub-pages retain the shared Card spacing.  No fixed pixel
+        height is imposed: the card follows its content and the overview table
+        supplies its own scrollable maximum based on row metrics.
+        """
+        card.root_layout.setContentsMargins(14, 8, 14, 8)
+        card.root_layout.setSpacing(6)
+        card.body_layout.setSpacing(6)
+        card.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
 
     def _build_stream_card(self):
         card = Card("Stream Configuration")
         grid = QGridLayout()
-        self.execution_host_combo = QComboBox()
+        self.execution_host_combo = ClickWheelComboBox()
         self.execution_host_combo.currentTextChanged.connect(
             self._on_execution_host_changed
         )
@@ -1080,10 +1350,10 @@ class CameraPage(QWidget):
         self.jetson_target_label.setObjectName("Muted")
         self.jetson_status_label = QLabel("Not connected")
         self.jetson_status_label.setObjectName("Muted")
-        self.device_combo = QComboBox()
-        self.resolution_combo = QComboBox()
-        self.fps_combo = QComboBox()
-        self.format_combo = QComboBox()
+        self.device_combo = ClickWheelComboBox()
+        self.resolution_combo = ClickWheelComboBox()
+        self.fps_combo = ClickWheelComboBox()
+        self.format_combo = ClickWheelComboBox()
 
         fields = (
             ("Execution Host:", self.execution_host_combo),
@@ -1108,6 +1378,7 @@ class CameraPage(QWidget):
         card.body_layout.addLayout(grid)
 
         self.resolution_combo.currentIndexChanged.connect(self._update_stream_options)
+        self.device_combo.currentIndexChanged.connect(self._on_monitor_device_changed)
         self.fps_combo.currentTextChanged.connect(self._on_fps_changed)
         actions = QHBoxLayout()
         self.start_stream_button = QPushButton("▶  START STREAM")
@@ -1122,6 +1393,11 @@ class CameraPage(QWidget):
         self.start_stream_button.clicked.connect(lambda: self._request_action("start_stream"))
         self.stop_stream_button.clicked.connect(lambda: self._request_action("stop_stream"))
         return card
+
+    def _on_monitor_device_changed(self, _index):
+        device = self._selected_monitor_device()
+        if device is not None and self.connection_state == CameraConnectionState.DISCONNECTED:
+            self._apply_monitor_device(device)
 
     def _build_monitor_card(self):
         card = Card("Live Monitor")
@@ -1288,6 +1564,10 @@ class CameraPage(QWidget):
 
     def _build_log_card(self):
         card = Card()
+        self.live_log_card = card
+        card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         header = QHBoxLayout()
         title = QLabel("Live Log")
         title.setObjectName("CardTitle")
@@ -1310,7 +1590,10 @@ class CameraPage(QWidget):
         self.live_log.setObjectName("LiveLog")
         self.live_log.setReadOnly(True)
         self.live_log.setMinimumHeight(110)
-        card.body_layout.addWidget(self.live_log)
+        self.live_log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        card.body_layout.addWidget(self.live_log, 1)
         return card
 
     @staticmethod
@@ -1331,21 +1614,36 @@ class CameraPage(QWidget):
         profile_id = self.model_combo.currentData()
         if not profile_id:
             return
+        selected_device = self._selected_monitor_device()
+        expected_profile = profile_id_for_camera(selected_device) if selected_device else None
+        if (
+            selected_device is not None
+            and not self._synchronizing_device_profile
+            and profile_id != expected_profile
+        ):
+            self.append_log(
+                "WARNING",
+                f"Profile {self.model_combo.currentText()} is incompatible with "
+                f"{selected_device.model} / SN{selected_device.serial or '-'}; restoring the device profile.",
+            )
+            self._apply_monitor_device(selected_device)
+            return
         profile = self.camera_service.profile(profile_id)
 
         self.execution_host_combo.clear()
         self.execution_host_combo.addItems(profile.execution_hosts)
         if profile.backend == "zed" and "Jetson" in profile.execution_hosts:
             self.execution_host_combo.setCurrentText("Jetson")
-        self.device_combo.clear()
-        self.device_combo.addItem("Auto discover required", None)
-        self.resolution_combo.clear()
+        if selected_device is None:
+            self.device_combo.clear()
+            self.device_combo.addItem("Auto discover required", None)
+        self._clear_stream_configuration()
         self._load_stream_capabilities(profile.profile_id)
         self._set_overview(
             {
                 "Model": profile.display_name,
-                "Interface": profile.interface_hint,
-                "SDK / Driver": profile.sdk_driver,
+                "Input Type": profile.interface_hint,
+                "Driver": profile.sdk_driver,
             }
         )
         self._set_state(CameraConnectionState.DISCONNECTED)
@@ -1353,6 +1651,7 @@ class CameraPage(QWidget):
         self.append_log("INFO", f"Camera profile selected: {profile.display_name}.")
 
     def _load_stream_capabilities(self, profile_id):
+        self._runtime_stream_profiles = {}
         profile = self.camera_service.profile(profile_id)
         self.resolution_combo.blockSignals(True)
         self.resolution_combo.clear()
@@ -1444,22 +1743,32 @@ class CameraPage(QWidget):
         index = self.resolution_combo.currentIndex()
         if not profile_id or index < 0:
             return
-        stream_profile = self.camera_service.profile(profile_id).stream_profiles[index]
+        runtime = self._runtime_stream_profiles.get(self.resolution_combo.currentData())
+        if runtime is not None:
+            width, height, runtime_values = runtime
+            fps_values = sorted(runtime_values["fps"])
+            formats = sorted(runtime_values["formats"])
+            label = f"Runtime {width}x{height}"
+        else:
+            stream_profile = self.camera_service.profile(profile_id).stream_profiles[index]
+            fps_values = list(stream_profile.fps)
+            formats = list(stream_profile.formats)
+            label = stream_profile.label
         previous_fps = self.fps_combo.currentText()
         self.fps_combo.blockSignals(True)
         self.fps_combo.clear()
-        self.fps_combo.addItems([str(value) for value in stream_profile.fps])
-        if previous_fps in [str(value) for value in stream_profile.fps]:
+        self.fps_combo.addItems([str(value) for value in fps_values])
+        if previous_fps in [str(value) for value in fps_values]:
             self.fps_combo.setCurrentText(previous_fps)
         self.fps_combo.blockSignals(False)
         self.format_combo.clear()
-        self.format_combo.addItems(stream_profile.formats)
+        self.format_combo.addItems(formats or ["--"])
         self.append_log(
             "INFO",
-            f"Resolution selected: {stream_profile.label} "
-            f"({stream_profile.resolution.replace(' ', '')})",
+            f"Resolution selected: {label} "
+            f"({self.resolution_combo.currentText().replace(' ', '')})",
         )
-        self.append_log("INFO", f"Available FPS: {list(stream_profile.fps)}")
+        self.append_log("INFO", f"Available FPS: {fps_values}")
         self._on_fps_changed(self.fps_combo.currentText())
 
     def _on_fps_changed(self, fps):
@@ -1467,18 +1776,29 @@ class CameraPage(QWidget):
             self.append_log("INFO", f"FPS selected: {fps}")
 
     def _action_payload(self):
-        profile = self.camera_service.profile(self.model_combo.currentData())
+        profile_id = self.model_combo.currentData()
+        profile = self.camera_service.profile(profile_id) if profile_id else None
         stream = next(
             (item for item in profile.stream_profiles if item.key == self.resolution_combo.currentData()),
             None,
-        )
+        ) if profile else None
+        selected = self._selected_monitor_device()
+        try:
+            fps = int(self.fps_combo.currentText() or 0)
+        except ValueError:
+            fps = 0
         return {
-            "profile_id": self.model_combo.currentData(),
+            "profile_id": profile_id,
             "execution_host": self.execution_host_combo.currentText(),
-            "device_id": self.device_combo.currentData(),
+            "device_id": selected.serial if selected is not None else self.device_combo.currentData(),
+            "device_uid": selected.device_uid if selected is not None else None,
+            "access_mode": selected.access_mode.value if selected is not None else CameraAccessMode.DIRECT_SDK.value,
+            "ros_node": selected.ros_node if selected is not None else None,
+            "rgb_topic": selected.rgb_topic if selected is not None else None,
+            "rgb_message_type": "sensor_msgs/msg/Image",
             "resolution_key": self.resolution_combo.currentData(),
             "resolution": stream.resolution if stream else self.resolution_combo.currentText(),
-            "fps": int(self.fps_combo.currentText() or 0),
+            "fps": fps,
             "pixel_format": self.format_combo.currentText(),
             "preview_mode": PREVIEW_MODE,
             "host_gstreamer_available": self.host_gstreamer.get("available", False),
@@ -1495,11 +1815,46 @@ class CameraPage(QWidget):
             return
 
         remote = self.execution_host_combo.currentText() == "Jetson"
+        if remote and action == "discover":
+            if not self._require_jetson_connection("discover cameras"):
+                return
+            self._set_state(CameraConnectionState.DISCOVERING)
+            self.append_log("INFO", "Auto discovery started.")
+            self._set_actions_enabled(False)
+            if not self.camera_inventory_service.discover_all():
+                self._set_actions_enabled(True)
+                self._set_state(CameraConnectionState.DISCONNECTED)
+            return
+        selected_device = self._selected_monitor_device()
+        if (
+            selected_device is not None
+            and selected_device.access_mode != CameraAccessMode.ROS_READ_ONLY
+            and action in {"connect", "start_stream"}
+            and profile_id_for_camera(selected_device) is None
+        ):
+            self.append_log(
+                "ERROR", f"No compatible profile is available for {selected_device.model}; direct SDK access is disabled."
+            )
+            return
+        if remote and action == "connect" and selected_device is not None:
+            if selected_device.access_mode == CameraAccessMode.ROS_READ_ONLY:
+                if not self._require_jetson_connection("connect to ROS camera"):
+                    return
+                self._connect_ros_read_only(selected_device)
+                return
+            if selected_device.access_mode == CameraAccessMode.UNAVAILABLE:
+                self.append_log(
+                    "ERROR", "Camera is discovered but unavailable: ROS stream is not active and direct SDK access is unavailable."
+                )
+                return
         if remote and action == "start_stream":
             if self.connection_state != CameraConnectionState.CONNECTED:
                 self.append_log("WARNING", "Start Stream requires a connected camera.")
                 return
             payload = self._action_payload()
+            if selected_device is not None and selected_device.access_mode == CameraAccessMode.ROS_READ_ONLY:
+                self._start_ros_monitoring(selected_device, payload)
+                return
             if not payload.get("device_id"):
                 self.append_log("ERROR", "Start Stream failed: select a camera serial number.")
                 return
@@ -1524,6 +1879,12 @@ class CameraPage(QWidget):
         if remote and action == "stop_stream":
             if self.connection_state != CameraConnectionState.STREAMING:
                 return
+            if self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
+                self.append_log("INFO", "Stop Stream requested; stopping local ROS subscriptions only.")
+                self.ros_monitor_controller.stop()
+                self._stop_preview("OFF", "Preview stopped")
+                self._set_state(CameraConnectionState.CONNECTED)
+                return
             self.stream_stop_requested.emit(self._action_payload())
             self.append_log("INFO", "Stop Stream requested")
             self.append_log("INFO", "Waiting for remote stream worker to stop")
@@ -1531,7 +1892,20 @@ class CameraPage(QWidget):
             self._set_actions_enabled(False)
             self.stream_controller.stop()
             return
+        if remote and action == "disconnect" and self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
+            if self.connection_state == CameraConnectionState.STREAMING:
+                self.append_log("INFO", "Disconnect requested; unsubscribing from production ROS stream only.")
+                self.ros_monitor_controller.stop()
+                self._stop_preview("OFF", "Preview stopped")
+            self._disconnect_ros_read_only()
+            return
         if remote and action == "disconnect" and self.connection_state == CameraConnectionState.STREAMING:
+            if self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
+                self.append_log("INFO", "Disconnect requested; unsubscribing from production ROS stream only.")
+                self.ros_monitor_controller.stop()
+                self._stop_preview("OFF", "Preview stopped")
+                self._disconnect_ros_read_only()
+                return
             self._disconnect_after_stop = True
             self.append_log("INFO", "Disconnect requested; stopping camera stream first.")
             self._stop_preview("STOPPING", "Preview stopped")
@@ -1552,6 +1926,7 @@ class CameraPage(QWidget):
             "stop_stream": self.stream_stop_requested,
         }
         signals[action].emit(payload)
+
 
         if action == "discover":
             self._set_state(CameraConnectionState.DISCOVERING)
@@ -1610,6 +1985,86 @@ class CameraPage(QWidget):
             self._on_discovery_succeeded(result)
         else:
             self._on_action_succeeded(action, result or {})
+
+    def _connect_ros_read_only(self, device):
+        """Attach to an external producer without invoking the ZED SDK."""
+        self._monitor_access_mode = CameraAccessMode.ROS_READ_ONLY
+        self._ros_monitor_device = device
+        self._set_state(CameraConnectionState.CONNECTING)
+        self.append_log("INFO", "Connect requested.")
+        self.append_log("INFO", "Camera already active in production ROS.")
+        self.append_log("INFO", "Using ROS read-only monitor mode.")
+        self._set_overview_from_inventory(device)
+        self._set_state(CameraConnectionState.CONNECTED)
+        self.connection_status_label.setText("CONNECTED VIA ROS")
+        self.append_log("INFO", f"Connected to {device.ros_node or 'production ROS'}.")
+        self.append_log("INFO", f"RGB stream {'available' if device.stream_active else 'not active'}: {device.rgb_topic or '-'}")
+
+    def _disconnect_ros_read_only(self):
+        self.ros_monitor_controller.stop()
+        self._ros_monitor_device = None
+        self._set_state(CameraConnectionState.DISCONNECTED)
+        self.append_log("INFO", "ROS read-only monitor disconnected; production camera remains untouched.")
+
+    def _start_ros_monitoring(self, device, payload):
+        if not device.rgb_topic:
+            self.append_log("ERROR", "ROS stream unavailable: no RGB topic was discovered.")
+            return
+        self.append_log("INFO", "Start Stream requested; starting ROS monitoring only.")
+        self.append_log("INFO", f"Subscribing to {device.rgb_topic}.")
+        self._ros_monitor_started_at = time.monotonic()
+        self._ros_monitor_frame_count = 0
+        self._ros_monitor_last_timestamp = None
+        self._reset_stream_metrics(device.metadata.get("target_fps") or "--")
+        self._set_state(CameraConnectionState.STREAMING)
+        self.stream_chip.set_state("ok", "ROS Stream Active")
+        self._stop_preview("STARTING", "Waiting for ROS RGB frames...")
+        self.ros_monitor_controller.start(payload)
+
+    def _on_ros_monitor_sample(self, sample):
+        if self.connection_state != CameraConnectionState.STREAMING:
+            return
+        count = int(sample.get("frame_count") or 0)
+        if not sample.get("received") or count <= 0:
+            self.stream_chip.set_state("warning", "ROS Stream Waiting")
+            return
+        self._ros_monitor_frame_count += count
+        observed_fps = sample.get("observed_fps")
+        duration = time.monotonic() - (self._ros_monitor_started_at or time.monotonic())
+        status = {
+            "configured_fps": self._ros_monitor_device.metadata.get("target_fps") if self._ros_monitor_device else None,
+            "actual_fps": observed_fps,
+            "frame_interval_ms": (1000.0 / observed_fps) if observed_fps else None,
+            "frame_count": self._ros_monitor_frame_count,
+            "dropped_frames": 0,
+            "stream_duration_s": duration,
+            "timestamp": sample.get("timestamp") or "--",
+            "exposure": "N/A (ROS read-only)",
+            "gain": "N/A (ROS read-only)",
+            "temperature": "N/A (ROS read-only)",
+        }
+        self._update_monitor(status)
+        encoded = sample.get("jpeg_base64")
+        if encoded:
+            image = QImage()
+            if image.loadFromData(base64.b64decode(encoded), "JPG"):
+                self.preview_state = "ACTIVE"
+                self.preview_state_label.setText("ROS")
+                self.preview_label.show_image(image)
+                self.preview_fps_label.setText(
+                    f"Preview FPS: {observed_fps:.1f}" if isinstance(observed_fps, (float, int)) else "Preview FPS: --"
+                )
+        self.stream_chip.set_state("ok", "ROS Stream Active")
+
+    def _on_ros_monitor_failed(self, error):
+        if self.connection_state == CameraConnectionState.STREAMING:
+            self.stream_chip.set_state("warning", "ROS Stream Waiting")
+            self.append_log("WARNING", f"ROS monitor sample unavailable: {error}")
+
+    def _on_ros_monitor_stopped(self):
+        # This is intentionally local-only. No ROS node/service/process is sent
+        # a stop request because the publisher is externally owned.
+        pass
 
     def _on_remote_operation_failed(self, request_id, error):
         if request_id != self.remote_request_id:
@@ -1689,7 +2144,9 @@ class CameraPage(QWidget):
                         "SDK Model": device.get("raw_model", device.get("model", "-")),
                         "Execution Host": self.execution_host_combo.currentText(),
                         "Resolution": result.get("resolution", self.resolution_combo.currentText()),
-                        "FPS": result.get("fps", self.fps_combo.currentText()),
+                        "Configured / Target FPS": result.get("fps", self.fps_combo.currentText()),
+                        "Access Mode": "DIRECT SDK",
+                        "Direct SDK": "CONNECTED",
                         "Camera State": "CONNECTED",
                     }
                 )
@@ -1961,15 +2418,20 @@ class CameraPage(QWidget):
     def _set_state(self, state):
         self.connection_state = state
         label = state.value.replace("_", " ")
-        self.connection_status_label.setText(label)
+        ros_read_only = self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY
+        self.connection_status_label.setText(
+            "CONNECTED VIA ROS" if ros_read_only and state in (
+                CameraConnectionState.CONNECTED, CameraConnectionState.STREAMING
+            ) else label
+        )
         if state == CameraConnectionState.CONNECTED:
             self.connection_chip.set_state("ok", "Connected")
             self.device_chip.set_state("ok", "Device Ready")
-            self.stream_chip.set_state("idle", "Stream Idle")
+            self.stream_chip.set_state("ok" if ros_read_only else "idle", "ROS Stream Active" if ros_read_only else "Stream Idle")
         elif state == CameraConnectionState.STREAMING:
             self.connection_chip.set_state("ok", "Connected")
             self.device_chip.set_state("ok", "Device Ready")
-            self.stream_chip.set_state("ok", "Streaming")
+            self.stream_chip.set_state("ok", "ROS Stream Active" if ros_read_only else "Streaming")
         elif state in (CameraConnectionState.DISCOVERING, CameraConnectionState.CONNECTING):
             self.connection_chip.set_state("warning", label.title())
             self.device_chip.set_state("idle", "Device Not Ready")
@@ -2013,23 +2475,27 @@ class CameraPage(QWidget):
     def _set_overview(self, values):
         normalized = {
             "Model": values.get("Model", values.get("model", "-")),
-            "SDK Model": values.get(
-                "SDK Model", values.get("raw_model", values.get("model", "-"))
+            "Detected SDK Model": values.get(
+                "Detected SDK Model", values.get("SDK Model", values.get("raw_model", values.get("model", "-")))
             ),
             "Serial Number": values.get(
                 "Serial Number", values.get("serial_number", "-")
             ),
+            "Vendor": values.get("Vendor", values.get("vendor", "-")),
+            "Driver": values.get("Driver", values.get("driver_name", values.get("sdk_driver", "-"))),
+            "Driver Version": values.get("Driver Version", values.get("driver_version", "-")),
+            "Input Type": values.get("Input Type", values.get("input_type", values.get("interface", "-"))),
             "Firmware": values.get("Firmware", values.get("firmware", "-")),
-            "Interface": values.get("Interface", values.get("interface", "-")),
-            "Device Path / Port": values.get(
-                "Device Path / Port", values.get("device_path", "-")
-            ),
-            "SDK / Driver": values.get(
-                "SDK / Driver", values.get("sdk_driver", "-")
-            ),
-            "Execution Host": values.get("Execution Host", "-"),
             "Resolution": values.get("Resolution", "-"),
-            "FPS": values.get("FPS", "-"),
+            "Configured / Target FPS": values.get("Configured / Target FPS", values.get("FPS", values.get("fps", "-"))),
+            "ROS Node": values.get("ROS Node", values.get("ros_node", "-")),
+            "RGB Topic": values.get("RGB Topic", values.get("rgb_topic", "-")),
+            "Access Mode": values.get("Access Mode", values.get("access_mode", "-")),
+            "Direct SDK": values.get("Direct SDK", "-"),
+            "ROS Stream": values.get("ROS Stream", "-"),
+            "Physical State": values.get("Physical State", values.get("physical_state", "-")),
+            "Physical Path": values.get("Physical Path", values.get("device_path", "-")),
+            "Port": values.get("Port", values.get("port", "-")),
             "Camera State": values.get("Camera State", values.get("state", "-")),
         }
         for row in range(self.overview_table.rowCount()):
@@ -2142,12 +2608,29 @@ class CameraPage(QWidget):
             target = f"{selected[0].model} — SN{selected[0].serial or '-'}"
         else:
             target = "Selected camera unavailable"
-        drivers = ", ".join(
-            sorted({device.ros_driver or "UNSUPPORTED" for device in selected})
-        ) or "--"
+        requirements = definition.parameters
+        if test_id in {f"ROS-{index:03d}" for index in range(1, 9)}:
+            prerequisite_summary = ", ".join((
+                f"ROS Graph: {'Required' if requirements.get('requires_ros_graph', True) else 'Not Required'}",
+                f"Camera Candidate: {'Required' if requirements.get('requires_camera_candidate', True) else 'Not Required'}",
+                f"Physical Identity: {'Required' if requirements.get('requires_physical_identity', False) else 'Not Required'}",
+            ))
+            target_detail = f"Prerequisites: {prerequisite_summary}"
+        else:
+            drivers = ", ".join(
+                sorted({device.ros_driver or "UNSUPPORTED" for device in selected})
+            ) or "--"
+            target_detail = f"Driver: {drivers}"
+        prerequisite_parameter_names = {
+            "requires_jetson", "requires_ros_environment", "requires_ros_graph",
+            "requires_camera_candidate", "requires_physical_camera",
+            "requires_physical_identity", "requires_controllable_node",
+            "requires_model_capability", "required_capabilities",
+        }
         parameters = "  |  ".join(
             f"{key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
             for key, value in definition.parameters.items()
+            if key not in prerequisite_parameter_names
         ) or "--"
         result = self.ros_test_results.get(test_id)
         latest = self.ros_test_statuses.get(test_id, "NOT RUN")
@@ -2159,17 +2642,33 @@ class CameraPage(QWidget):
                 "ros_distro",
                 "all_required_drivers_installed",
                 "all_devices_pass",
-                "selected_camera_count",
             ):
                 if key in measurements:
                     measurement_lines.append(
                         f"{key.replace('_', ' ').title()}: "
                         f"{self._format_detail_value(measurements[key])}"
                     )
+            candidate_count = measurements.get("selected_camera_count")
+            if test_id == "ROS-001":
+                candidate_count = measurements.get("camera_candidate_count")
+            if candidate_count is not None:
+                measurement_lines.append(
+                    f"Candidates Selected: {self._format_detail_value(candidate_count)}"
+                )
             for sub_result in result.get("sub_results") or ():
                 device_measurements = sub_result.get("measurements") or {}
                 prefix = f"SN{sub_result.get('serial', '-')}"
                 summary = []
+                if sub_result.get("mapping_confidence"):
+                    summary.append(f"mapping={sub_result.get('mapping_confidence')}")
+                summary.extend(f"warning={item}" for item in sub_result.get("warnings") or ())
+                prerequisites = device_measurements.get("prerequisites")
+                if prerequisites:
+                    summary.append("prerequisites=" + ", ".join(
+                        f"{name} {value}" for name, value in prerequisites.items()
+                    ))
+                if device_measurements.get("capability_status") == "NOT_APPLICABLE":
+                    summary.append("capability=NOT APPLICABLE")
                 if test_id == "ROS-005":
                     image = device_measurements.get("image") or {}
                     info = device_measurements.get("camera_info") or {}
@@ -2284,7 +2783,7 @@ class CameraPage(QWidget):
             ]
         self.ros_test_detail_text.setPlainText(
             f"Test ID: {definition.test_id}  |  Test Name: {definition.name}\n"
-            f"Target: {target}  |  Driver: {drivers}  |  "
+            f"Target: {target}  |  {target_detail}  |  "
             f"Automation Key: {definition.automation_key}\n"
             f"Parameters: {parameters}\n"
             "Latest Measurements: "
@@ -2475,25 +2974,22 @@ class CameraPage(QWidget):
 
     def _render_ros_environment_result(self, result):
         measurements = result.get("measurements") or {}
-        driver_results = measurements.get("driver_results") or {}
+        self._last_ros_camera_graph = measurements.get("camera_graph") or {}
+        self._ros_graph_accessible = bool(measurements.get("ros_graph_accessible"))
         self._ros_environment_values.update({
+            "Jetson Hostname": measurements.get("jetson_hostname") or "UNKNOWN",
             "ROS Distro": measurements.get("ros_distro") or "UNAVAILABLE",
             "ROS Environment": (
                 "LOADED" if measurements.get("ros_environment_loaded")
                 else "UNAVAILABLE"
             ),
-            "zed_wrapper": (
-                "FOUND" if driver_results.get("zed_wrapper", {}).get("installed")
-                else "NOT REQUIRED" if "zed_wrapper" not in driver_results
-                else "MISSING"
-            ),
-            "realsense2_camera": (
-                "FOUND"
-                if driver_results.get("realsense2_camera", {}).get("installed")
-                else "NOT REQUIRED" if "realsense2_camera" not in driver_results
-                else "MISSING"
-            ),
             "Workspace": measurements.get("workspace_setup") or "NONE",
+            "ROS Nodes": measurements.get("ros_node_count") if measurements.get("ros_node_count") is not None else "UNKNOWN",
+            "ROS Topics": measurements.get("ros_topic_count") if measurements.get("ros_topic_count") is not None else "UNKNOWN",
+            "Camera Candidates": measurements.get("camera_candidate_count") if measurements.get("camera_candidate_count") is not None else "UNKNOWN",
+            "Physical Cameras": measurements.get("selected_camera_count", 0),
+            "Mapped Cameras": measurements.get("mapped_camera_count") if measurements.get("mapped_camera_count") is not None else "UNKNOWN",
+            "Unmapped Cameras": measurements.get("unmapped_camera_count") if measurements.get("unmapped_camera_count") is not None else "UNKNOWN",
             "Last Check": result.get("finished_at") or "UNKNOWN",
         })
         status = result.get("status") or "UNKNOWN"
@@ -2503,13 +2999,25 @@ class CameraPage(QWidget):
             f"ROS {str(distro).title()}" if distro else f"ROS {status}",
             "ok" if status == "PASS" else "error",
         )
-        required_drivers = sorted(driver_results)
-        driver_name = required_drivers[0] if len(required_drivers) == 1 else "Drivers"
-        drivers_ready = bool(measurements.get("all_required_drivers_installed"))
         self._set_ros_badge(
             self.ros_driver_status_label,
-            f"{driver_name} {'READY' if drivers_ready else 'MISSING'}",
-            "ok" if drivers_ready else "error",
+            "Graph Discovery READY" if measurements.get("ros_graph_accessible") else "Graph Discovery UNAVAILABLE",
+            "ok" if measurements.get("ros_graph_accessible") else "error",
+        )
+        candidate_count = measurements.get("camera_candidate_count")
+        mapped_count = measurements.get("mapped_camera_count")
+        physical_count = measurements.get("selected_camera_count")
+        mapping_state = (
+            "UNKNOWN" if physical_count in (None, 0) else
+            "READY" if mapped_count == physical_count else "PARTIAL"
+        )
+        self._set_ros_badge(
+            self.ros_camera_status_label,
+            f"Camera Candidates {candidate_count if candidate_count is not None else '?'} / Mapping {mapping_state}",
+            "ok" if mapping_state == "READY" else "warning",
+        )
+        self._sync_inventory_detail_after_refresh(
+            tuple(self.camera_inventory_service.inventory.snapshot.devices)
         )
         self._update_open_ros_environment_dialog()
 
@@ -2747,8 +3255,6 @@ class CameraPage(QWidget):
             self._show_test_details(test_id)
 
     def _refresh_test_summaries(self):
-        if not hasattr(self, "automation_summary_label"):
-            return
         counts = {name: 0 for name in ("PASS", "FAIL", "ERROR", "BLOCKED", "RUNNING", "CANCELLED", "NOT RUN")}
         for status in self.test_statuses.values():
             counts[status] = counts.get(status, 0) + 1
@@ -2758,18 +3264,12 @@ class CameraPage(QWidget):
             selected = sum(
                 self.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
                 for row in range(self.test_table.rowCount())
+        )
+        if hasattr(self, "test_run_summary_label"):
+            self.test_run_summary_label.setText(
+                f"Total {total} | Selected {selected} | PASS {counts['PASS']} | FAIL {counts['FAIL']} | "
+                f"ERROR {counts['ERROR']} | BLOCKED {counts['BLOCKED']}"
             )
-        running = self.test_runner_worker is not None and self.test_runner_worker.isRunning()
-        runner = "RUNNING" if running else "IDLE"
-        self.automation_runner_label.setText(f"Runner: {runner}")
-        self.automation_summary_label.setText(
-            f"Total {total}  |  PASS {counts['PASS']}  |  FAIL {counts['FAIL']}  |  "
-            f"ERROR {counts['ERROR']}  |  BLOCKED {counts['BLOCKED']}  |  NOT RUN {counts['NOT RUN']}"
-        )
-        self.test_run_summary_label.setText(
-            f"Total {total} | Selected {selected} | PASS {counts['PASS']} | FAIL {counts['FAIL']} | "
-            f"ERROR {counts['ERROR']} | BLOCKED {counts['BLOCKED']}"
-        )
         self._refresh_runner_status()
 
     def _refresh_runner_status(self):
