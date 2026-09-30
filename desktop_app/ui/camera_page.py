@@ -8,7 +8,6 @@ from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
     QDialog,
     QFileDialog,
     QGridLayout,
@@ -34,8 +33,7 @@ from desktop_app.services.camera_inventory_service import CameraInventoryService
 from desktop_app.controllers.camera_stream_controller import CameraStreamController
 from desktop_app.controllers.ros_camera_monitor_controller import RosCameraMonitorController
 from desktop_app.state.jetson_state import JetsonState
-from desktop_app.ui.widgets import Card, StatusChip
-from desktop_app.ui.camera_controls import ClickWheelComboBox
+from desktop_app.ui.widgets import Card, StatusChip, ClickWheelComboBox
 from desktop_app.workers.camera_connection_worker import CameraConnectionWorker
 from desktop_app.workers.camera_discovery_worker import CameraDiscoveryWorker
 from desktop_app.workers.camera_worker import CameraActionWorker
@@ -45,7 +43,13 @@ from desktop_app.workers.gstreamer_preview_receiver import (
     inspect_host_gstreamer,
 )
 from devices.camera.inventory import CameraTargetSelection
-from devices.camera.models import CameraAccessMode, CameraConnectionState
+from devices.camera.models import (
+    CameraAccessMode,
+    CameraConnectionState,
+    CameraOwnership,
+    CameraRuntimeState,
+    camera_automation_identity,
+)
 from devices.camera.service import CameraService
 from devices.camera.preview_config import (
     H264_PREVIEW_PORT, PREVIEW_HEIGHT, PREVIEW_MODE, PREVIEW_PORT, PREVIEW_WIDTH,
@@ -126,6 +130,12 @@ class CameraPage(QWidget):
         self.camera_target_selection = CameraTargetSelection()
         self._selected_inventory_detail_uid = None
         self.connection_state = CameraConnectionState.DISCONNECTED
+        self.operation_state = "idle"
+        self.runtime_state = CameraRuntimeState.DISCONNECTED
+        self.camera_owner = CameraOwnership.NONE
+        self._automation_running = False
+        self.requested_configuration = {}
+        self.actual_configuration = None
         self.camera_worker = None
         self.remote_request_id = None
         self.remote_action = None
@@ -376,7 +386,7 @@ class CameraPage(QWidget):
         title.setObjectName("CardTitle")
         target_label = QLabel("Target Camera")
         target_label.setObjectName("Muted")
-        self.target_camera_combo = QComboBox()
+        self.target_camera_combo = ClickWheelComboBox()
         self.target_camera_combo.setMinimumWidth(280)
         self.target_camera_combo.addItem("All Cameras", None)
         self.inventory_discover_button = QPushButton("DISCOVER ALL")
@@ -569,7 +579,7 @@ class CameraPage(QWidget):
         card = Card("ROS Execution Log")
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Log Filter"))
-        self.ros_log_filter_combo = QComboBox()
+        self.ros_log_filter_combo = ClickWheelComboBox()
         self.ros_log_filter_combo.addItems(
             ["ALL", "INFO", "PASS", "WARNING", "ERROR"]
         )
@@ -1374,12 +1384,16 @@ class CameraPage(QWidget):
         self.jetson_status_title = QLabel("Status:")
         grid.addWidget(self.jetson_status_title, len(fields) + 1, 0)
         grid.addWidget(self.jetson_status_label, len(fields) + 1, 1)
+        self.stream_configuration_summary = QLabel("Requested: -- | Actual: --")
+        self.stream_configuration_summary.setObjectName("Muted")
+        grid.addWidget(self.stream_configuration_summary, len(fields) + 2, 0, 1, 2)
         grid.setColumnStretch(1, 1)
         card.body_layout.addLayout(grid)
 
         self.resolution_combo.currentIndexChanged.connect(self._update_stream_options)
         self.device_combo.currentIndexChanged.connect(self._on_monitor_device_changed)
         self.fps_combo.currentTextChanged.connect(self._on_fps_changed)
+        self.format_combo.currentTextChanged.connect(self._on_pixel_format_changed)
         actions = QHBoxLayout()
         self.start_stream_button = QPushButton("▶  START STREAM")
         self.start_stream_button.setObjectName("PrimaryButton")
@@ -1479,11 +1493,11 @@ class CameraPage(QWidget):
         self.test_search = QLineEdit()
         self.test_search.setPlaceholderText("Search by Test ID or name...")
         self.test_search.textChanged.connect(self._apply_test_filters)
-        self.test_category_filter = QComboBox()
+        self.test_category_filter = ClickWheelComboBox()
         self.test_category_filter.addItem("All")
         self.test_category_filter.addItems(sorted({item.group for item in self.test_definitions}))
         self.test_category_filter.currentTextChanged.connect(self._apply_test_filters)
-        self.test_status_filter = QComboBox()
+        self.test_status_filter = ClickWheelComboBox()
         self.test_status_filter.addItems(("All", "NOT RUN", "RUNNING", "PASS", "FAIL", "ERROR", "BLOCKED", "CANCELLED"))
         self.test_status_filter.currentTextChanged.connect(self._apply_test_filters)
         self.select_all_tests_button = QPushButton("Select All")
@@ -1755,14 +1769,19 @@ class CameraPage(QWidget):
             formats = list(stream_profile.formats)
             label = stream_profile.label
         previous_fps = self.fps_combo.currentText()
+        previous_format = self.format_combo.currentText()
         self.fps_combo.blockSignals(True)
         self.fps_combo.clear()
         self.fps_combo.addItems([str(value) for value in fps_values])
         if previous_fps in [str(value) for value in fps_values]:
             self.fps_combo.setCurrentText(previous_fps)
         self.fps_combo.blockSignals(False)
+        self.format_combo.blockSignals(True)
         self.format_combo.clear()
         self.format_combo.addItems(formats or ["--"])
+        if previous_format in formats:
+            self.format_combo.setCurrentText(previous_format)
+        self.format_combo.blockSignals(False)
         self.append_log(
             "INFO",
             f"Resolution selected: {label} "
@@ -1770,23 +1789,21 @@ class CameraPage(QWidget):
         )
         self.append_log("INFO", f"Available FPS: {fps_values}")
         self._on_fps_changed(self.fps_combo.currentText())
+        self._refresh_configuration_summary()
 
     def _on_fps_changed(self, fps):
         if fps:
             self.append_log("INFO", f"FPS selected: {fps}")
+        self._refresh_configuration_summary()
+
+    def _on_pixel_format_changed(self, pixel_format):
+        self._refresh_configuration_summary()
 
     def _action_payload(self):
-        profile_id = self.model_combo.currentData()
-        profile = self.camera_service.profile(profile_id) if profile_id else None
-        stream = next(
-            (item for item in profile.stream_profiles if item.key == self.resolution_combo.currentData()),
-            None,
-        ) if profile else None
+        requested = self._capture_requested_configuration()
+        self.requested_configuration = requested
+        profile_id = requested["profile_id"]
         selected = self._selected_monitor_device()
-        try:
-            fps = int(self.fps_combo.currentText() or 0)
-        except ValueError:
-            fps = 0
         return {
             "profile_id": profile_id,
             "execution_host": self.execution_host_combo.currentText(),
@@ -1796,16 +1813,96 @@ class CameraPage(QWidget):
             "ros_node": selected.ros_node if selected is not None else None,
             "rgb_topic": selected.rgb_topic if selected is not None else None,
             "rgb_message_type": "sensor_msgs/msg/Image",
-            "resolution_key": self.resolution_combo.currentData(),
-            "resolution": stream.resolution if stream else self.resolution_combo.currentText(),
-            "fps": fps,
-            "pixel_format": self.format_combo.currentText(),
+            "resolution_key": requested["requested_resolution_key"],
+            "resolution": requested["requested_resolution"],
+            "fps": requested["requested_fps"],
+            "pixel_format": requested["requested_pixel_format"],
             "preview_mode": PREVIEW_MODE,
             "host_gstreamer_available": self.host_gstreamer.get("available", False),
             "host_h264_decoder": self.host_gstreamer.get("decoder"),
         }
 
+    def _capture_requested_configuration(self):
+        profile_id = self.model_combo.currentData()
+        profile = self.camera_service.profile(profile_id) if profile_id else None
+        resolution_key = self.resolution_combo.currentData()
+        stream = next(
+            (item for item in profile.stream_profiles if item.key == resolution_key),
+            None,
+        ) if profile else None
+        try:
+            fps = int(self.fps_combo.currentText() or 0)
+        except ValueError:
+            fps = 0
+        return {
+            "requested_resolution_key": resolution_key,
+            "requested_resolution": stream.resolution if stream else self.resolution_combo.currentText(),
+            "requested_fps": fps,
+            "requested_pixel_format": self.format_combo.currentText(),
+            "profile_id": profile_id,
+        }
+
+    def _refresh_configuration_summary(self):
+        if not hasattr(self, "stream_configuration_summary"):
+            return
+        self.requested_configuration = self._capture_requested_configuration()
+        requested = self.requested_configuration
+        requested_text = (
+            f"{requested['requested_resolution_key'] or '--'} @ "
+            f"{requested['requested_fps'] or '--'} FPS, "
+            f"{requested['requested_pixel_format'] or '--'}"
+        )
+        actual = self.actual_configuration if self.runtime_state == CameraRuntimeState.STREAMING else None
+        actual_text = "--"
+        if actual:
+            actual_text = (
+                f"{actual.get('actual_resolution') or '--'} @ "
+                f"{actual.get('actual_configured_fps') or '--'} FPS, "
+                f"{actual.get('actual_pixel_format') or '--'}"
+            )
+        self.stream_configuration_summary.setText(
+            f"Requested: {requested_text} | Actual: {actual_text}"
+        )
+
+    def _record_actual_configuration(self, status):
+        if not status:
+            return
+        width, height = status.get("actual_width"), status.get("actual_height")
+        actual_resolution = (
+            f"{width}x{height}" if width and height
+            else status.get("resolution")
+        )
+        self.actual_configuration = {
+            "actual_resolution_key": status.get("resolution_key"),
+            "actual_resolution": actual_resolution,
+            "actual_configured_fps": status.get("configured_fps"),
+            "actual_pixel_format": status.get("pixel_format"),
+        }
+        self._refresh_configuration_summary()
+
     def _request_action(self, action):
+        # A stream-status poll is a transient operation, but it must not make
+        # the active stream impossible to stop. CameraStreamController queues
+        # STOP behind that one in-flight poll.
+        if action == "stop_stream" and self.execution_host_combo.currentText() == "Jetson":
+            if self.connection_state != CameraConnectionState.STREAMING or self.operation_state == "stopping":
+                return
+            if self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
+                self.append_log("INFO", "Stop Stream requested.")
+                self.append_log("INFO", "Stopping local ROS subscriptions only.")
+                self.ros_monitor_controller.stop()
+                self._stop_preview("OFF", "Preview stopped")
+                self._set_state(CameraConnectionState.CONNECTED)
+                return
+            self.append_log("INFO", "Stop Stream requested.")
+            self.append_log("INFO", "Waiting for remote stream worker to stop")
+            self.stream_stop_requested.emit(self._action_payload())
+            self._set_operation_state("stopping")
+            self._stop_preview("STOPPING", "Preview stopped")
+            self._set_actions_enabled(False)
+            self.stream_controller.stop()
+            return
+
         if (
             (self.camera_worker and self.camera_worker.isRunning())
             or self.remote_request_id is not None
@@ -1873,24 +1970,9 @@ class CameraPage(QWidget):
                 self.append_log("WARNING", f"GStreamer H.264 Preview unavailable on Host: {self.host_gstreamer.get('error')}.")
                 self.append_log("INFO", "Falling back to JPEG/TCP Preview.")
             self._reset_stream_metrics(payload["fps"])
+            self._set_operation_state("starting")
             self._set_actions_enabled(False)
             self.stream_controller.start(payload)
-            return
-        if remote and action == "stop_stream":
-            if self.connection_state != CameraConnectionState.STREAMING:
-                return
-            if self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
-                self.append_log("INFO", "Stop Stream requested; stopping local ROS subscriptions only.")
-                self.ros_monitor_controller.stop()
-                self._stop_preview("OFF", "Preview stopped")
-                self._set_state(CameraConnectionState.CONNECTED)
-                return
-            self.stream_stop_requested.emit(self._action_payload())
-            self.append_log("INFO", "Stop Stream requested")
-            self.append_log("INFO", "Waiting for remote stream worker to stop")
-            self._stop_preview("STOPPING", "Preview stopped")
-            self._set_actions_enabled(False)
-            self.stream_controller.stop()
             return
         if remote and action == "disconnect" and self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY:
             if self.connection_state == CameraConnectionState.STREAMING:
@@ -2194,19 +2276,28 @@ class CameraPage(QWidget):
             self.append_log("ERROR", f"SDK error: {error}")
 
     def _on_stream_started(self, result):
+        status = result.get("status", {})
+        self._record_actual_configuration(status)
+        self._set_operation_state("idle")
         self._set_actions_enabled(True)
         self._set_state(CameraConnectionState.STREAMING)
         self.append_log("INFO", f"Remote stream PID: {result.get('pid', '-')}")
         self.append_log("INFO", "Camera opened successfully on Jetson")
         self.append_log("INFO", "Stream started")
         self.append_log("INFO", "Stream metrics monitoring started.")
-        self.append_log("INFO", f"Configured stream: {self.resolution_combo.currentData()} @ {self.fps_combo.currentText()} FPS.")
-        self._update_monitor(result.get("status", {}))
-        self._start_preview(result.get("status", {}))
+        actual = self.actual_configuration or {}
+        actual_resolution = actual.get("actual_resolution") or self.resolution_combo.currentText()
+        actual_fps = actual.get("actual_configured_fps") or self.fps_combo.currentText()
+        self.append_log("INFO", f"Configured stream: {actual_resolution} @ {actual_fps} FPS.")
+        self._update_monitor(status)
+        self._start_preview(status)
 
     def _on_stream_stopped(self, result):
+        self.actual_configuration = None
+        self._set_operation_state("idle")
         self._set_actions_enabled(True)
         self._set_state(CameraConnectionState.CONNECTED)
+        self._refresh_configuration_summary()
         if result.get("sigterm_used"):
             self.append_log("WARNING", "Graceful stop timed out; SIGTERM fallback was used.")
         self.append_log("INFO", "Camera closed safely")
@@ -2227,6 +2318,9 @@ class CameraPage(QWidget):
             self.append_log("WARNING", "Camera stream remains active without Live Preview.")
             return
         self._stop_preview("LOST", "Preview unavailable")
+        if action == "start_stream":
+            self.actual_configuration = None
+        self._set_operation_state("idle")
         self._set_actions_enabled(True)
         if action == "stop_stream":
             self._set_state(CameraConnectionState.STREAMING)
@@ -2333,7 +2427,11 @@ class CameraPage(QWidget):
         else:
             port = int(status.get("preview_port") or PREVIEW_PORT)
             reason = status.get("preview_error")
-            if reason:
+            preview_is_live = (
+                status.get("preview_state") == "live"
+                or status.get("preview_client_connected") is True
+            )
+            if reason and not preview_is_live:
                 self.append_log("WARNING", f"GStreamer H.264 Preview unavailable: {reason}.")
             if PREVIEW_MODE != "JPEG_TCP": self.append_log("INFO", "Falling back to JPEG/TCP Preview.")
             self.append_log("INFO", f"Jetson JPEG preview server: {self.jetson_state.host}:{port} (worker binds 0.0.0.0).")
@@ -2417,6 +2515,7 @@ class CameraPage(QWidget):
 
     def _set_state(self, state):
         self.connection_state = state
+        self._refresh_camera_lifecycle()
         label = state.value.replace("_", " ")
         ros_read_only = self._monitor_access_mode == CameraAccessMode.ROS_READ_ONLY
         self.connection_status_label.setText(
@@ -2441,9 +2540,52 @@ class CameraPage(QWidget):
             self.device_chip.set_state("idle", "Device Not Ready")
             self.stream_chip.set_state("idle", "Stream Idle")
         self._update_button_states()
+        self._refresh_configuration_summary()
         self._refresh_runner_status()
         if hasattr(self, "run_tests_button"):
             self._update_selected_test_count()
+
+    def _set_operation_state(self, state):
+        self.operation_state = state
+        self._refresh_camera_lifecycle()
+        self._update_configuration_controls()
+        self._refresh_configuration_summary()
+
+    def _refresh_camera_lifecycle(self):
+        if self.operation_state == "stopping":
+            self.runtime_state = CameraRuntimeState.STOPPING
+        elif self.operation_state == "starting" or self.connection_state == CameraConnectionState.CONNECTING:
+            self.runtime_state = CameraRuntimeState.STARTING
+        elif self.connection_state == CameraConnectionState.STREAMING:
+            self.runtime_state = CameraRuntimeState.STREAMING
+        elif self._automation_running:
+            self.runtime_state = CameraRuntimeState.AUTOMATION_RUNNING
+        elif self.connection_state == CameraConnectionState.CONNECTED:
+            self.runtime_state = CameraRuntimeState.CONNECTED_IDLE
+        else:
+            self.runtime_state = CameraRuntimeState.DISCONNECTED
+
+        if self.connection_state == CameraConnectionState.STREAMING:
+            self.camera_owner = CameraOwnership.MONITOR
+        elif self._automation_running:
+            self.camera_owner = CameraOwnership.AUTOMATION
+        elif self.connection_state == CameraConnectionState.CONNECTED:
+            self.camera_owner = CameraOwnership.MONITOR
+        else:
+            self.camera_owner = CameraOwnership.NONE
+
+    def _update_configuration_controls(self):
+        if not hasattr(self, "resolution_combo"):
+            return
+        locked_states = {
+            CameraRuntimeState.STARTING,
+            CameraRuntimeState.STREAMING,
+            CameraRuntimeState.STOPPING,
+            CameraRuntimeState.AUTOMATION_RUNNING,
+        }
+        enabled = self.runtime_state not in locked_states
+        for combo in (self.resolution_combo, self.fps_combo, self.format_combo):
+            combo.setEnabled(enabled)
 
     def _update_button_states(self):
         connected = self.connection_state in (
@@ -2457,10 +2599,10 @@ class CameraPage(QWidget):
         self.model_combo.setEnabled(not connected)
         self.execution_host_combo.setEnabled(not connected)
         self.device_combo.setEnabled(not connected)
-        self.resolution_combo.setEnabled(not connected)
-        self.fps_combo.setEnabled(not connected)
-        self.start_stream_button.setEnabled(connected and not streaming)
-        self.stop_stream_button.setEnabled(streaming)
+        operation_idle = self.operation_state == "idle"
+        self.start_stream_button.setEnabled(connected and not streaming and operation_idle)
+        self.stop_stream_button.setEnabled(streaming and operation_idle)
+        self._update_configuration_controls()
 
     def _set_actions_enabled(self, enabled):
         self.discover_button.setEnabled(enabled)
@@ -2471,6 +2613,7 @@ class CameraPage(QWidget):
             self.disconnect_button.setEnabled(False)
             self.start_stream_button.setEnabled(False)
             self.stop_stream_button.setEnabled(False)
+            self._update_configuration_controls()
 
     def _set_overview(self, values):
         normalized = {
@@ -3029,7 +3172,27 @@ class CameraPage(QWidget):
         total = self.test_table.rowCount()
         self.selected_tests_label.setText(f"{selected} / {total} Selected")
         running = self.test_runner_worker is not None and self.test_runner_worker.isRunning()
-        prerequisites = self.jetson_service.is_connected and self.connection_state == CameraConnectionState.CONNECTED
+        selected_camera = self._selected_monitor_device()
+        profile_id = (
+            profile_id_for_camera(selected_camera)
+            if selected_camera is not None else self.model_combo.currentData()
+        )
+        serial = (
+            selected_camera.serial if selected_camera is not None
+            else self.device_combo.currentData()
+        )
+        try:
+            direct_profile = self.camera_service.profile(profile_id).backend == "zed"
+        except (KeyError, TypeError):
+            direct_profile = False
+        operation_stable = self.runtime_state not in (
+            CameraRuntimeState.STARTING,
+            CameraRuntimeState.STOPPING,
+        )
+        prerequisites = (
+            self.jetson_service.is_connected and bool(serial)
+            and direct_profile and operation_stable
+        )
         self.run_tests_button.setEnabled(selected > 0 and not running and prerequisites)
         self._refresh_test_summaries()
 
@@ -3100,10 +3263,27 @@ class CameraPage(QWidget):
         measurement_lines = ""
         if result:
             measurements = result.get("measurements") or {}
-            measurement_lines = "\n\nMeasurements\n" + (
-                "\n".join(f"  {key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
-                          for key, value in measurements.items() if not isinstance(value, (dict, list))) or "  --"
-            )
+            detail_parts = []
+            error = result.get("error") or {}
+            if error.get("message"):
+                detail_parts.append(f"Result Detail\n  {error['message']}")
+            prerequisites = measurements.get("prerequisites") or (
+                error.get("diagnostics") or {}
+            ).get("prerequisites")
+            if prerequisites:
+                detail_parts.append(
+                    "Prerequisites\n" + self._readable_result_value(prerequisites, 1)
+                )
+            scalar_measurements = {
+                key: value for key, value in measurements.items()
+                if key != "prerequisites" and not isinstance(value, (dict, list))
+            }
+            if scalar_measurements:
+                detail_parts.append("Measurements\n" + "\n".join(
+                    f"  {key.replace('_', ' ').title()}: {self._format_detail_value(value)}"
+                    for key, value in scalar_measurements.items()
+                ))
+            measurement_lines = "\n\n" + "\n\n".join(detail_parts) if detail_parts else ""
         self.test_detail_text.setPlainText(
             f"{definition.test_id}\n{definition.name}\n\n"
             f"Category\n  {definition.group}\n\nAutomation Key\n  {definition.automation_key}\n\n"
@@ -3156,6 +3336,9 @@ class CameraPage(QWidget):
         return "--" if value is None else str(value)
 
     def _run_selected_tests(self):
+        if self.test_runner_worker and self.test_runner_worker.isRunning():
+            self._append_test_log("WARNING", "Camera automated tests are already running.")
+            return
         if self.ros_test_runner_worker and self.ros_test_runner_worker.isRunning():
             self._append_test_log(
                 "WARNING", "ROS automated tests are already running."
@@ -3171,15 +3354,23 @@ class CameraPage(QWidget):
         self.tests_requested.emit(selected)
         definitions = [item for item in self.test_definitions if item.test_id in selected]
         self._append_test_log("INFO", f"Test run started: {len(definitions)} selected cases.")
-        device = {
-            "profile_id": self.model_combo.currentData(),
-            "model": self.model_combo.currentText(),
-            "serial": self.device_combo.currentData(),
-        }
+        selected_camera = self._selected_monitor_device()
+        device = camera_automation_identity({
+            "device_uid": selected_camera.device_uid if selected_camera else None,
+            "vendor": selected_camera.vendor if selected_camera else None,
+            "model": selected_camera.model if selected_camera else self.model_combo.currentText(),
+            "profile_id": profile_id_for_camera(selected_camera)
+                if selected_camera else self.model_combo.currentData(),
+            "serial": selected_camera.serial if selected_camera else self.device_combo.currentData(),
+        })
         configuration = {
             "manual_stream_active": self.connection_state == CameraConnectionState.STREAMING,
             "camera_connected": self.connection_state == CameraConnectionState.CONNECTED,
+            "camera_owner_before_automation": self.camera_owner.value,
         }
+        self._automation_running = self.connection_state != CameraConnectionState.STREAMING
+        self._refresh_camera_lifecycle()
+        self._update_configuration_controls()
         worker = CameraTestRunnerWorker(
             definitions, self.test_registry, self.jetson_service,
             self.camera_service, device, configuration, self,
@@ -3223,6 +3414,9 @@ class CameraPage(QWidget):
         self._append_test_log("INFO", f"Structured results: {result_root}")
 
     def _on_test_worker_finished(self):
+        self._automation_running = False
+        self._refresh_camera_lifecycle()
+        self._update_configuration_controls()
         self.test_runner_worker = None
         self.cancel_tests_button.setEnabled(False)
         self.test_table.setEnabled(True)
@@ -3282,8 +3476,13 @@ class CameraPage(QWidget):
         self.runner_jetson_label.setText(f"Jetson: {'CONNECTED' if self.jetson_service.is_connected else 'DISCONNECTED'}")
         ready = self.connection_state == CameraConnectionState.CONNECTED
         self.runner_camera_label.setText(f"Camera: {'READY' if ready else 'NOT READY'}")
-        model = self.model_combo.currentText() if hasattr(self, "model_combo") else "--"
-        serial = self.device_combo.currentData() if hasattr(self, "device_combo") else None
+        selected_camera = self._selected_monitor_device() if hasattr(self, "device_combo") else None
+        model = selected_camera.model if selected_camera is not None else (
+            self.model_combo.currentText() if hasattr(self, "model_combo") else "--"
+        )
+        serial = selected_camera.serial if selected_camera is not None else (
+            self.device_combo.currentData() if hasattr(self, "device_combo") else None
+        )
         self.runner_device_label.setText(f"Device: {model or '--'}")
         self.runner_serial_label.setText(f"SN: {serial or '--'}")
 
@@ -3370,6 +3569,7 @@ class CameraPage(QWidget):
         elif self.connection_state == CameraConnectionState.STREAMING:
             self._shutdown_pending = True
             self.append_log("INFO", "Application shutdown: stopping camera stream.")
+            self._set_operation_state("stopping")
             self._stop_preview("STOPPING", "Preview stopped")
             self._set_actions_enabled(False)
             self.stream_controller.stop()

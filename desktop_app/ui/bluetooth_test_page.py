@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -21,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.bluetooth import BluetoothTestRunner, BluetoothTestStatus
-from desktop_app.ui.widgets import Card
+from desktop_app.ui.widgets import Card, ClickWheelComboBox
 
 
 class BluetoothTestPage(QWidget):
@@ -66,14 +65,14 @@ class BluetoothTestPage(QWidget):
         catalog_card = Card("Bluetooth Test Catalog")
         filters = QHBoxLayout()
         filters.addWidget(QLabel("Group Filter:"))
-        self.group_filter = QComboBox()
+        self.group_filter = ClickWheelComboBox()
         self.group_filter.addItem("All", None)
         for group in sorted({case.group for case in self.runner.test_cases}):
             self.group_filter.addItem(group, group)
         self.group_filter.currentIndexChanged.connect(self._apply_filters)
         filters.addWidget(self.group_filter)
         filters.addWidget(QLabel("Status Filter:"))
-        self.status_filter = QComboBox()
+        self.status_filter = ClickWheelComboBox()
         self.status_filter.addItem("All", None)
         for status in BluetoothTestStatus:
             self.status_filter.addItem(

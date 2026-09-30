@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QAbstractItemView, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -13,7 +13,7 @@ from core.testing.definitions import load_definitions
 from core.testing.registry import TestRegistry
 from desktop_app.workers.ai_test_runner_worker import AiTestRunnerWorker
 from devices.ai import AiModule, AiRemoteService, AiRuntimeAdapter, register_ai_handlers
-from desktop_app.ui.widgets import Card, StatusChip
+from desktop_app.ui.widgets import Card, StatusChip, ClickWheelComboBox
 
 
 class AiPage(QWidget):
@@ -54,7 +54,7 @@ class AiPage(QWidget):
     def _monitor(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setSpacing(10)
         header = Card("AI Status")
-        row = QHBoxLayout(); row.addWidget(QLabel("Target AI Module:")); self.target_combo = QComboBox(); self.target_combo.currentIndexChanged.connect(self._target_changed); row.addWidget(self.target_combo, 1)
+        row = QHBoxLayout(); row.addWidget(QLabel("Target AI Module:")); self.target_combo = ClickWheelComboBox(); self.target_combo.currentIndexChanged.connect(self._target_changed); row.addWidget(self.target_combo, 1)
         self.discover_button = QPushButton("⌕  DISCOVER / REFRESH"); self.discover_button.setObjectName("PrimaryButton"); self.discover_button.clicked.connect(self.discover); row.addWidget(self.discover_button)
         header.body_layout.addLayout(row)
         badges = QHBoxLayout(); self.jetson_chip = StatusChip("Jetson: DISCONNECTED", "idle"); self.runtime_chip = StatusChip("AI Runtime: UNKNOWN", "idle"); self.input_chip = StatusChip("Input: UNKNOWN", "idle"); self.model_chip = StatusChip("Model: UNKNOWN", "idle"); self.inference_chip = StatusChip("Inference: UNKNOWN", "idle")

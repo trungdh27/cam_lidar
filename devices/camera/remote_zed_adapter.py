@@ -71,7 +71,7 @@ class RemoteZedAdapter(BaseCameraAdapter):
 
     async def _stream_with_ssh(self, ssh, action: str, payload: dict) -> dict:
         if action == "start_stream":
-            if not self.connected:
+            if not self.connected and not payload.get("automation_validation"):
                 raise CameraOpenError("Connect and validate the camera before starting a stream.")
             self._validate_configuration(payload)
         requested_mode = payload.get("preview_mode", PREVIEW_MODE).upper()
@@ -85,7 +85,8 @@ class RemoteZedAdapter(BaseCameraAdapter):
         request = {
             "action": {"start_stream": "start", "stream_status": "status", "stop_stream": "stop", "preview_fallback": "preview_fallback"}[action],
             "profile_id": payload["profile_id"],
-            "serial_number": payload.get("device_id"),
+            "serial_number": self._serial_number(payload),
+            "device_uid": payload.get("device_uid"),
             "resolution_key": payload.get("resolution_key"),
             "resolution": payload.get("resolution"),
             "fps": payload.get("fps"),
@@ -225,6 +226,13 @@ class RemoteZedAdapter(BaseCameraAdapter):
     @staticmethod
     def _validate_configuration(payload):
         profile = get_camera_profile(payload["profile_id"])
+        serial = RemoteZedAdapter._serial_number(payload)
+        if not serial or not str(serial).isdigit():
+            raise CameraOpenError(
+                "Invalid automation camera identity: "
+                f"device_uid={payload.get('device_uid') or '-'} serial={serial or '-'}; "
+                "ZED serial must contain digits only."
+            )
         resolution_key = payload.get("resolution_key")
         if resolution_key in (None, ""):
             raise CameraOpenError("Missing required parameter: resolution_key.")
@@ -245,6 +253,11 @@ class RemoteZedAdapter(BaseCameraAdapter):
                 f"Unsupported configuration: {stream.display_name} @ {fps} FPS. "
                 f"Allowed FPS: {list(stream.fps)}"
             )
+
+    @staticmethod
+    def _serial_number(payload):
+        """Prefer the explicit raw serial; retain legacy device_id callers."""
+        return payload.get("serial_number") or payload.get("device_id")
 
     @staticmethod
     def _matches_profile(device, profile_id):

@@ -14,6 +14,7 @@ from devices.camera.testing import (
     TestStatus,
     TestTimeoutError,
 )
+from devices.camera.models import camera_automation_identity
 from core.testing.errors import RemoteOperationTimeoutError
 
 
@@ -106,7 +107,8 @@ class CameraTestRunnerWorker(QThread):
         self.definitions, self.registry = list(definitions), registry
         self.cancel_event = Event()
         self.client = SharedJetsonOperationClient(service, camera_service, self.cancel_event)
-        self.device, self.configuration = device, configuration
+        self.device = camera_automation_identity(device)
+        self.configuration = configuration
 
     def cancel(self):
         self.cancel_event.set(); self.client.wake()
@@ -115,6 +117,12 @@ class CameraTestRunnerWorker(QThread):
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         serial = str(self.device.get("serial") or "unknown")
         root = Path("evidence") / "camera" / run_stamp / serial
+        self.log_event.emit(
+            "INFO",
+            f"Camera payload identity — Model: {self.device.get('model') or '--'}; "
+            f"Device UID: {self.device.get('device_uid') or '--'}; "
+            f"Serial: {self.device.get('serial') or '--'}.",
+        )
         runner = TestRunner(self.registry, TestEvaluator())
         results = []
         for definition in self.definitions:
@@ -134,7 +142,12 @@ class CameraTestRunnerWorker(QThread):
                 "WARNING" if result.status in (TestStatus.BLOCKED, TestStatus.CANCELLED, TestStatus.SKIPPED) else
                 "ERROR"
             )
-            self.log_event.emit(level, f"[{definition.test_id}] {result.status.value}.")
+            message = (result.error or {}).get("message")
+            self.log_event.emit(
+                level,
+                f"[{definition.test_id}] {result.status.value}"
+                + (f": {message}" if result.status == TestStatus.BLOCKED and message else "."),
+            )
             if result.status == TestStatus.CANCELLED: break
         counts = Counter(item.status.value for item in results)
         summary = {"total": len(results), **counts}

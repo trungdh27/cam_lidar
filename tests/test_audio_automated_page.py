@@ -4,11 +4,15 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 from desktop_app.audio.audio_automation import AudioLogEvent, make_action_result
 from desktop_app.audio.audio_manager import AudioManager
 from desktop_app.ui.audio_automated_page import AudioAutomatedPage
+from desktop_app.ui.theme import APP_STYLE
+from desktop_app.ui.widgets import ClickWheelComboBox, ClickWheelSpinBox
 
 
 class _Signal:
@@ -50,8 +54,103 @@ class AudioAutomatedPageTests(unittest.TestCase):
         self.page = AudioAutomatedPage(self.manager, self.service, lambda: None)
 
     def tearDown(self):
+        self.page.close()
         self.page.deleteLater()
         QApplication.processEvents()
+
+    def _show_scroll_page(self):
+        self.page.setStyleSheet(APP_STYLE)
+        self.page.resize(1100, 600)
+        self.page.show()
+        self.page.activateWindow()
+        QApplication.processEvents()
+        return self.page.findChild(QScrollArea)
+
+    def _wheel_over(self, widget, delta):
+        # Window-level delivery exercises Qt's actual parent scroll routing.
+        point = widget.mapTo(self.page, widget.rect().center())
+        QTest.wheelEvent(self.page.windowHandle(), point, QPoint(0, delta))
+        QApplication.processEvents()
+
+    def test_configuration_hover_scroll_preserves_all_parameters(self):
+        self.page.duration_spin.setValue(11)
+        controls = (
+            (self.page.duration_spin, 11),
+            (self.page.sample_rate_combo, 16000),
+            (self.page.channels_spin, 2),
+            (self.page.iteration_action_combo, "capture"),
+            (self.page.iteration_count_spin, 20),
+            (self.page.iteration_duration_spin, 5),
+            (self.page.iteration_interval_spin, 1),
+        )
+        scroll = self._show_scroll_page()
+        bar = scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        for control, expected in controls:
+            with self.subTest(control=control, expected=expected):
+                self.assertIsInstance(control, (ClickWheelSpinBox, ClickWheelComboBox))
+                control.clearFocus()
+                for _ in range(3):
+                    for delta in (-120, 120):
+                        scroll.ensureWidgetVisible(control)
+                        QApplication.processEvents()
+                        before = bar.value()
+                        self._wheel_over(control, delta)
+                        self.assertNotEqual(bar.value(), before)
+                        actual = control.currentData() if isinstance(control, ClickWheelComboBox) else control.value()
+                        self.assertEqual(actual, expected)
+
+    def test_iteration_click_wheel_then_blank_page_scroll(self):
+        scroll = self._show_scroll_page()
+        spin = self.page.iteration_count_spin
+        scroll.ensureWidgetVisible(spin)
+        QApplication.processEvents()
+        QTest.mouseClick(spin.lineEdit(), Qt.MouseButton.LeftButton)
+        self.assertTrue(spin.hasFocus())
+        before = scroll.verticalScrollBar().value()
+        self._wheel_over(spin, 120)
+        self.assertEqual(spin.value(), 21)
+        self.assertEqual(scroll.verticalScrollBar().value(), before)
+        blank = scroll.widget()
+        QTest.mouseClick(blank, Qt.MouseButton.LeftButton,
+                         pos=QPoint(2, scroll.verticalScrollBar().value() + 10))
+        self.assertFalse(spin.hasFocus())
+        self._wheel_over(spin, -120)
+        self.assertEqual(spin.value(), 21)
+        self.assertGreater(scroll.verticalScrollBar().value(), before)
+
+    def test_sample_rate_click_wheel_then_focus_elsewhere(self):
+        scroll = self._show_scroll_page()
+        combo = self.page.sample_rate_combo
+        scroll.ensureWidgetVisible(combo)
+        QApplication.processEvents()
+        QTest.mouseClick(combo, Qt.MouseButton.LeftButton)
+        QApplication.processEvents()
+        self.assertTrue(combo.view().isVisible())
+        combo.hidePopup()
+        QApplication.processEvents()
+        self.assertTrue(combo.hasFocus())
+        self._wheel_over(combo, -120)
+        self.assertEqual(combo.currentData(), 44100)
+        QTest.mouseClick(self.page.duration_spin.lineEdit(), Qt.MouseButton.LeftButton)
+        self.assertFalse(combo.hasFocus())
+        before = scroll.verticalScrollBar().value()
+        self._wheel_over(combo, -120)
+        self.assertEqual(combo.currentData(), 44100)
+        self.assertGreater(scroll.verticalScrollBar().value(), before)
+
+    def test_execution_log_keeps_its_own_wheel_scrolling(self):
+        scroll = self._show_scroll_page()
+        log = self.page.log_text
+        log.setPlainText("\n".join(f"Execution log line {i}" for i in range(200)))
+        QApplication.processEvents()
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        log.verticalScrollBar().setValue(0)
+        QApplication.processEvents()
+        before = scroll.verticalScrollBar().value()
+        self._wheel_over(log.viewport(), -120)
+        self.assertGreater(log.verticalScrollBar().value(), 0)
+        self.assertEqual(scroll.verticalScrollBar().value(), before)
 
     @staticmethod
     def _analysis_result(**overrides):

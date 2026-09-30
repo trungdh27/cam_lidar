@@ -19,8 +19,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
-    QSpinBox,
     QTabWidget,
     QTextEdit,
     QToolButton,
@@ -45,7 +43,9 @@ from desktop_app.audio.audio_models import (
 )
 from desktop_app.state.jetson_state import JetsonState
 from desktop_app.ui.audio_automated_page import AudioAutomatedPage
-from desktop_app.ui.widgets import Card, StatusChip
+from desktop_app.ui.widgets import (
+    Card, ClickWheelComboBox, ClickWheelSlider, ClickWheelSpinBox, StatusChip,
+)
 
 
 class AudioPage(QWidget):
@@ -221,8 +221,8 @@ class AudioPage(QWidget):
         devices_grid.setColumnStretch(1, 1)
         self.default_output_label = self._value_label()
         self.default_input_label = self._value_label()
-        self.output_device_combo = QComboBox()
-        self.input_device_combo = QComboBox()
+        self.output_device_combo = ClickWheelComboBox()
+        self.input_device_combo = ClickWheelComboBox()
         self.output_device_combo.setEnabled(False)
         self.input_device_combo.setEnabled(False)
         self.set_default_output_button = QPushButton("Set Default")
@@ -326,7 +326,7 @@ class AudioPage(QWidget):
         volume_grid.setVerticalSpacing(8)
         volume_grid.setColumnStretch(1, 1)
         self.volume_output_label = self._value_label()
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider = ClickWheelSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setMinimum(0)
         self.volume_slider.setMaximum(100)
         self.volume_slider.setValue(0)
@@ -383,16 +383,16 @@ class AudioPage(QWidget):
         recording_grid.setColumnStretch(3, 1)
         self.recording_input_label = self._value_label()
         self.recording_input_label.setText("No input audio device available.")
-        self.recording_sample_rate_combo = QComboBox()
+        self.recording_sample_rate_combo = ClickWheelComboBox()
         for rate in RECORDING_SAMPLE_RATES:
             self.recording_sample_rate_combo.addItem(f"{rate} Hz", rate)
-        self.recording_channels_combo = QComboBox()
+        self.recording_channels_combo = ClickWheelComboBox()
         for channels in RECORDING_CHANNELS:
             self.recording_channels_combo.addItem(str(channels), channels)
-        self.recording_format_combo = QComboBox()
+        self.recording_format_combo = ClickWheelComboBox()
         for display, backend in RECORDING_FORMATS.items():
             self.recording_format_combo.addItem(display, backend)
-        self.recording_duration_spin = QSpinBox()
+        self.recording_duration_spin = ClickWheelSpinBox()
         self.recording_duration_spin.setRange(1, 3600)
         self.recording_duration_spin.setValue(10)
         self.recording_duration_spin.setSuffix(" sec")

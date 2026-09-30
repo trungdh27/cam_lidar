@@ -34,7 +34,9 @@ from desktop_app.audio.audio_runtime import (
     AudioRuntimeMonitor,
     AudioRuntimeSample,
 )
-from desktop_app.ui.widgets import SectionFrame, StatusChip
+from desktop_app.ui.widgets import (
+    ClickWheelComboBox, ClickWheelSpinBox, SectionFrame, StatusChip,
+)
 
 
 class _ExecutionLogHighlighter(QSyntaxHighlighter):
@@ -416,7 +418,7 @@ class AudioAutomatedPage(QWidget):
         reliability_grid.setHorizontalSpacing(8)
         reliability_grid.setVerticalSpacing(7)
         reliability_grid.addWidget(self._key_label("Action"), 0, 0)
-        self.iteration_action_combo = QComboBox()
+        self.iteration_action_combo = ClickWheelComboBox()
         self.iteration_action_combo.addItem("Capture", "capture")
         self._set_control_height(self.iteration_action_combo)
         reliability_grid.addWidget(self.iteration_action_combo, 0, 1)
@@ -522,7 +524,7 @@ class AudioAutomatedPage(QWidget):
 
     @classmethod
     def _spin(cls, minimum: int, maximum: int, value: int, suffix: str = "") -> QSpinBox:
-        widget = QSpinBox()
+        widget = ClickWheelSpinBox()
         widget.setRange(minimum, maximum)
         widget.setValue(value)
         widget.setSuffix(suffix)
@@ -531,7 +533,7 @@ class AudioAutomatedPage(QWidget):
 
     @classmethod
     def _combo(cls, values, *, current, suffix: str = "") -> QComboBox:
-        widget = QComboBox()
+        widget = ClickWheelComboBox()
         for value in values:
             widget.addItem(f"{value}{suffix}", value)
         index = widget.findData(current)

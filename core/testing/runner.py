@@ -48,10 +48,14 @@ class TestRunner:
                 result.status = TestStatus.FAIL if failed else TestStatus.PASS
         except TestBlockedError as exc:
             result.status = TestStatus.BLOCKED
+            diagnostics = getattr(exc, "diagnostics", None) or {}
+            prerequisites = diagnostics.get("prerequisites")
+            if prerequisites:
+                result.measurements = {"prerequisites": dict(prerequisites)}
             result.error = {
                 "code": exc.code,
                 "message": _safe_diagnostic(str(exc)),
-                "diagnostics": _safe_diagnostic_data(getattr(exc, "diagnostics", None)),
+                "diagnostics": _safe_diagnostic_data(diagnostics),
             }
         except TestCancelledError as exc:
             result.status = TestStatus.CANCELLED; result.error = {"code": exc.code, "message": str(exc)}
