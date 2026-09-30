@@ -1,4 +1,94 @@
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel,
+    QSlider, QSpinBox, QVBoxLayout, QWidget,
+)
+
+
+class _ClickWheelFocusFilter(QObject):
+    """Handle editor-child clicks and release input focus on blank-area clicks.
+
+    Only mouse presses are observed. Scroll areas, logs, tables and combo popup
+    views retain their own wheel handling.
+    """
+
+    @staticmethod
+    def _control(widget):
+        while isinstance(widget, QWidget):
+            if isinstance(widget, _ClickWheelMixin):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(watched, QWidget):
+            # A popup temporarily owns focus and must keep normal selection and
+            # scrolling, including the mouse press that dismisses it.
+            if QApplication.activePopupWidget() is None:
+                previous = self._control(QApplication.focusWidget())
+                # Mouse presses can bubble to a non-focusable parent. Use the
+                # original hit position so that bubbling does not disarm the
+                # input that was just clicked.
+                target = QApplication.widgetAt(event.globalPosition().toPoint())
+                clicked = self._control(target or watched)
+                if previous is not None and previous is not clicked:
+                    previous.clearFocus()
+                if clicked is not None and event.button() == Qt.MouseButton.LeftButton:
+                    clicked.setFocus(Qt.FocusReason.MouseFocusReason)
+                    clicked._wheel_armed = True
+        return False
+
+
+class _ClickWheelMixin:
+    """Allow wheel edits after a click, until focus leaves the control.
+
+    Explicit arming prevents initial/programmatic focus from enabling wheel
+    edits. StrongFocus preserves Tab/keyboard use without wheel-acquired focus.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._wheel_armed = False
+        app = QApplication.instance()
+        if not hasattr(app, "_click_wheel_focus_filter"):
+            app._click_wheel_focus_filter = _ClickWheelFocusFilter(app)
+            app.installEventFilter(app._click_wheel_focus_filter)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        # Opening a combo popup can temporarily move focus away. Arm after
+        # normal processing as well as on presses in the embedded text editor.
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._wheel_armed = True
+
+    def focusOutEvent(self, event):
+        self._wheel_armed = False
+        super().focusOutEvent(event)
+
+    def wheelEvent(self, event):
+        if not self._wheel_armed or not self.hasFocus():
+            # Ignoring (rather than accepting) lets Qt route the original wheel
+            # event to the containing scroll area, including nested areas.
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class ClickWheelComboBox(_ClickWheelMixin, QComboBox):
+    """Combo box with click-enabled wheel selection; popup views are unchanged."""
+
+
+class ClickWheelSpinBox(_ClickWheelMixin, QSpinBox):
+    """Integer input with click-enabled wheel stepping."""
+
+
+class ClickWheelDoubleSpinBox(_ClickWheelMixin, QDoubleSpinBox):
+    """Decimal input with click-enabled wheel stepping."""
+
+
+class ClickWheelSlider(_ClickWheelMixin, QSlider):
+    """Slider with click-enabled wheel adjustment."""
 
 
 class Card(QFrame):

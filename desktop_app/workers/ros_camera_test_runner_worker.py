@@ -43,6 +43,8 @@ class RosCameraTestRunnerWorker(QThread):
         )
         self.adapter_registry = adapter_registry or RosCameraAdapterRegistry()
         self.process_manager = process_manager or RosRemoteProcessManager(self.client)
+        self.ros_camera_graph_cache = {}
+        self.ros_environment_cache = {}
 
     def cancel(self):
         self.cancel_event.set()
@@ -71,6 +73,8 @@ class RosCameraTestRunnerWorker(QThread):
                     "selected_devices": self.devices,
                     "ros_adapter_registry": self.adapter_registry,
                     "ros_process_manager": self.process_manager,
+                    "ros_camera_graph_cache": self.ros_camera_graph_cache,
+                    "ros_environment_cache": self.ros_environment_cache,
                 },
                 device=device_snapshot,
                 base_configuration={
@@ -99,6 +103,25 @@ class RosCameraTestRunnerWorker(QThread):
             self.log_event.emit(
                 level, f"[{definition.test_id}] {result.status.value}."
             )
+            if result.status == TestStatus.ERROR and result.error:
+                error = result.error
+                error_type = error.get("exception_type") or error.get("type") or error.get("code") or "ERROR"
+                self.log_event.emit(
+                    "ERROR",
+                    f"[{definition.test_id}] {error_type}: {error.get('message') or 'No error message was recorded.'}",
+                )
+                diagnostics = error.get("diagnostics")
+                if isinstance(diagnostics, dict):
+                    operation = diagnostics.get("operation")
+                    timeout = diagnostics.get("timeout_s")
+                    if operation:
+                        suffix = f" (timeout {timeout:g} s)" if isinstance(timeout, (int, float)) else ""
+                        self.log_event.emit("ERROR", f"[{definition.test_id}] Operation: {operation}{suffix}.")
+                if error.get("source_file"):
+                    self.log_event.emit(
+                        "ERROR",
+                        f"[{definition.test_id}] Source: {error['source_file']}:{error.get('source_line')} ({error.get('function') or 'unknown'}).",
+                    )
             if result.status == TestStatus.CANCELLED:
                 break
         counts = Counter(item.status.value for item in results)

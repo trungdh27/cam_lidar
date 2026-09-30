@@ -105,7 +105,7 @@ def jpeg_preview_server():
                 client.sendall(struct.pack("!I", len(payload)) + payload)
                 base["preview_frames_sent"] += 1
                 base["preview_jpeg_size"] = len(payload)
-                base["preview_state"] = "live"
+                base.update(preview_state="live", preview_client_connected=True, preview_error=None)
             except (OSError, socket.timeout) as exc:
                 try: client.close()
                 except OSError: pass

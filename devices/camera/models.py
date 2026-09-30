@@ -13,6 +13,29 @@ class CameraConnectionState(str, Enum):
     ERROR = "ERROR"
 
 
+class CameraOwnership(str, Enum):
+    NONE = "NONE"
+    MONITOR = "MONITOR"
+    AUTOMATION = "AUTOMATION"
+
+
+class CameraRuntimeState(str, Enum):
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTED_IDLE = "CONNECTED_IDLE"
+    STARTING = "STARTING"
+    STREAMING = "STREAMING"
+    STOPPING = "STOPPING"
+    AUTOMATION_RUNNING = "AUTOMATION_RUNNING"
+
+
+class CameraAccessMode(str, Enum):
+    """How this application may safely monitor a discovered camera."""
+
+    DIRECT_SDK = "DIRECT_SDK"
+    ROS_READ_ONLY = "ROS_READ_ONLY"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class CameraTransport(str, Enum):
     GMSL = "GMSL"
     USB = "USB"
@@ -80,6 +103,18 @@ class CameraDevice:
     profile_status: CameraProfileStatus = CameraProfileStatus.NOT_APPLICABLE
     physical_status: CameraPhysicalStatus = CameraPhysicalStatus.DETECTED
     ros_readiness: CameraRosReadiness = CameraRosReadiness.UNKNOWN
+    # Discovery sources describe different facts.  In particular, an SDK-open
+    # failure must never erase a camera which production ROS is publishing.
+    physical_detected: bool = True
+    direct_sdk_available: bool | None = None
+    ros_available: bool = False
+    ros_node: str | None = None
+    device_info_topic: str | None = None
+    rgb_topic: str | None = None
+    access_mode: CameraAccessMode = CameraAccessMode.UNAVAILABLE
+    owner: str | None = None
+    busy: bool = False
+    stream_active: bool = False
     discovery_source: str = "unknown"
     discovery_errors: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict = field(default_factory=dict)
@@ -88,7 +123,7 @@ class CameraDevice:
         payload = asdict(self)
         for key in (
             "transport", "usb_speed", "profile_status", "physical_status",
-            "ros_readiness",
+            "ros_readiness", "access_mode",
         ):
             value = payload.get(key)
             payload[key] = value.value if isinstance(value, Enum) else value
@@ -117,6 +152,70 @@ def make_camera_device_uid(
     fallback = f"{vendor_key}|{model}|{physical_port or 'unknown-port'}"
     digest = hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:12]
     return f"{vendor_key}:port-{digest}"
+
+
+def normalize_camera_serial(
+    serial: object,
+    *,
+    profile_id: str | None = None,
+    vendor: str | None = None,
+    device_uid: str | None = None,
+) -> str:
+    """Return the canonical raw serial for a known camera identity.
+
+    ZED SDK serials are numeric.  Only the canonical Stereolabs UID format is
+    parsed as a defensive fallback; identifiers from other vendors are never
+    split or rewritten.
+    """
+    raw = str(serial or "").strip()
+    is_zed = str(profile_id or "").startswith("zed_") or any(
+        token in str(vendor or "").casefold() for token in ("zed", "stereolabs")
+    )
+    if not is_zed:
+        return raw
+
+    # The inventory object's raw serial is authoritative.  A legacy caller may
+    # still supply the canonical UID in the serial slot, so accept only this
+    # precisely-known form as fallback.
+    candidate = raw or str(device_uid or "").strip()
+    match = re.fullmatch(r"stereolabs:(\d+)", candidate, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return raw
+
+
+def camera_automation_identity(device) -> dict[str, str]:
+    """Build the shared, vendor-aware identity passed to camera test handlers."""
+    def value(name, default=""):
+        if isinstance(device, dict):
+            return device.get(name, default)
+        return getattr(device, name, default)
+
+    profile_id = str(value("profile_id") or "")
+    vendor = str(value("vendor") or "")
+    if not vendor:
+        if profile_id.startswith("zed_"):
+            vendor = "Stereolabs"
+        elif profile_id.startswith("realsense_"):
+            vendor = "Intel RealSense"
+    device_uid = str(value("device_uid") or "")
+    model = str(value("model") or "")
+    raw_serial = value("serial", value("serial_number", ""))
+    if not device_uid and str(raw_serial or "").strip().lower().startswith("stereolabs:"):
+        device_uid = str(raw_serial).strip()
+    serial = normalize_camera_serial(
+        raw_serial,
+        profile_id=profile_id,
+        vendor=vendor,
+        device_uid=device_uid,
+    )
+    return {
+        "device_uid": device_uid,
+        "vendor": vendor,
+        "model": model,
+        "profile_id": profile_id,
+        "serial": serial,
+    }
 
 
 def make_ros_namespace_hint(

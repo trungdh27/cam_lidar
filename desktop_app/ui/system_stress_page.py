@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -45,6 +44,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from desktop_app.ui.widgets import ClickWheelComboBox
 
 from desktop_app.stress.catalog import StressCatalog, StressCatalogError
 from desktop_app.stress.baseline import baseline_summary_text
@@ -348,7 +349,7 @@ class StressEvidenceViewer(QWidget):
         controls = QHBoxLayout()
         self.auto_scroll = QCheckBox("AUTO SCROLL")
         self.auto_scroll.setChecked(True)
-        self.lines_combo = QComboBox()
+        self.lines_combo = ClickWheelComboBox()
         self.lines_combo.addItems(["500", "1000", "2000"])
         self.lines_combo.currentTextChanged.connect(self._reload_selected)
         self.refresh_button = _button("REFRESH NOW", "SmallButton")
@@ -1010,17 +1011,17 @@ class VDCatalogPage(QWidget):
         filters = QHBoxLayout(filter_bar)
         filters.setContentsMargins(8, 4, 8, 4)
         filters.setSpacing(6)
-        self.group_combo = QComboBox()
+        self.group_combo = ClickWheelComboBox()
         self.group_combo.setMinimumWidth(130)
         self.group_combo.setMaximumWidth(220)
         self.group_combo.addItem("All Groups")
         self.group_combo.addItems(sorted({item.group for item in self.catalog.definitions}))
-        self.status_combo = QComboBox()
+        self.status_combo = ClickWheelComboBox()
         self.status_combo.setMinimumWidth(92)
         self.status_combo.setMaximumWidth(140)
         self.status_combo.addItem("All")
         self.status_combo.addItems([status.value for status in RuntimeStatus])
-        self.severity_combo = QComboBox()
+        self.severity_combo = ClickWheelComboBox()
         self.severity_combo.setMinimumWidth(88)
         self.severity_combo.setMaximumWidth(140)
         self.severity_combo.addItem("All")

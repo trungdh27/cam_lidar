@@ -1,8 +1,19 @@
 import re
 import time
+from dataclasses import dataclass, replace
 
 from core.testing.errors import TestBlockedError
+from core.testing.errors import RemoteOperationTimeoutError
 from core.testing.evaluator import TestEvaluator
+from devices.camera.ros_automation.adapters import RosCameraAdapter
+from devices.camera.ros_automation.discovery import (
+    CAMERA_INFO,
+    IMAGE,
+    CameraRosEndpoint,
+    discover_camera_graph,
+    requirements_for_endpoint,
+)
+from devices.camera.ros_automation.models import RosImageProfile, RosLaunchSpec, RosNodeSession
 from devices.camera.ros_automation.registry import (
     UnsupportedRosCameraAdapterError,
 )
@@ -10,9 +21,132 @@ from devices.camera.ros_automation.remote import RosRemoteError
 
 
 class RosBlockedError(TestBlockedError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, diagnostics=None):
         super().__init__(message)
         self.code = code
+        self.diagnostics = diagnostics or {}
+
+
+@dataclass(frozen=True)
+class RosTestRequirements:
+    """Prerequisites declared by a ROS test definition, never inferred by name."""
+
+    requires_jetson: bool = True
+    requires_ros_environment: bool = True
+    requires_ros_graph: bool = True
+    requires_camera_candidate: bool = True
+    requires_physical_camera: bool = False
+    requires_physical_identity: bool = False
+    requires_controllable_node: bool = False
+    requires_model_capability: bool = False
+    required_capabilities: tuple[str, ...] = ()
+
+    @classmethod
+    def from_definition(cls, definition):
+        parameters = definition.parameters
+        return cls(
+            requires_jetson=bool(parameters.get("requires_jetson", True)),
+            requires_ros_environment=bool(parameters.get("requires_ros_environment", True)),
+            requires_ros_graph=bool(parameters.get("requires_ros_graph", True)),
+            requires_camera_candidate=bool(parameters.get("requires_camera_candidate", True)),
+            requires_physical_camera=bool(parameters.get("requires_physical_camera", False)),
+            requires_physical_identity=bool(parameters.get("requires_physical_identity", False)),
+            requires_controllable_node=bool(parameters.get("requires_controllable_node", False)),
+            requires_model_capability=bool(parameters.get("requires_model_capability", False)),
+            required_capabilities=tuple(parameters.get("required_capabilities") or ()),
+        )
+
+
+@dataclass(frozen=True)
+class RosCandidateTarget:
+    """Candidate-scoped target used when a test needs ROS evidence only."""
+
+    endpoint: CameraRosEndpoint
+    device_uid: str
+    model: str = "ROS Camera"
+    serial: str | None = None
+    ros_camera_model: str | None = None
+    ros_driver: str | None = None
+    ros_namespace_hint: str | None = None
+    mapping_confidence: str = "UNKNOWN"
+
+    @classmethod
+    def from_endpoint(cls, endpoint, mapping_confidence="UNKNOWN"):
+        return cls(
+            endpoint=endpoint,
+            device_uid="ros:" + endpoint.namespace,
+            model=endpoint.model or "ROS Camera",
+            serial=endpoint.serial,
+            ros_namespace_hint=endpoint.namespace,
+            mapping_confidence=mapping_confidence,
+        )
+
+
+class DynamicRosCameraAdapter(RosCameraAdapter):
+    """Adapter facade for an externally owned, graph-discovered camera.
+
+    It provides the existing collectors with actual topic names while never
+    supplying a launch package or taking ownership of the production node.
+    """
+
+    driver = "ros_graph"
+
+    def __init__(self, endpoint: CameraRosEndpoint):
+        self.endpoint = endpoint
+        self._requirements = requirements_for_endpoint(endpoint)
+
+    def build_launch_spec(self, device):
+        primary = self.endpoint.primary_image_topic
+        if not primary:
+            raise RosBlockedError("ROS_STREAM_UNAVAILABLE", "The discovered camera has no image publisher.")
+        return RosLaunchSpec(
+            driver=self.driver,
+            package="",
+            launch_file="",
+            arguments=(),
+            namespace=self.endpoint.namespace,
+            expected_node=(self.endpoint.nodes or (self.endpoint.namespace,))[0],
+            selected_serial=device.serial or "",
+            serial_parameter="",
+            ros_camera_model=device.ros_camera_model or "dynamic",
+            requested_profile=RosImageProfile(0, 0, 0, ("runtime",), "ros_graph_discovery"),
+            mandatory_topics=self._requirements,
+            primary_image_topic=primary,
+        )
+
+    def mandatory_topics(self, _device):
+        return self._requirements
+
+    def primary_image_requirement(self, _device):
+        return next(item for item in self._requirements if item.capability == "color")
+
+    def camera_info_requirement(self, _device):
+        item = next((item for item in self._requirements if item.capability == "camera_info"), None)
+        if item is None:
+            raise RosBlockedError(
+                "ROS_CAMERA_INFO_UNAVAILABLE",
+                "The discovered camera has no CameraInfo publisher; identity-dependent calibration validation is blocked.",
+            )
+        return item
+
+    def sensor_topics(self, _device):
+        # Only test sensors that this runtime actually advertises.  An RGB-only
+        # or unknown camera therefore passes its applicable sensor scope.
+        return tuple(
+            replace(item, availability="MANDATORY")
+            for item in self._requirements
+            if item.capability in {"imu", "temperature"}
+        )
+
+    def qos_topics(self, device):
+        topics = [self.primary_image_requirement(device)]
+        info = next((item for item in self._requirements if item.capability == "camera_info"), None)
+        if info is not None:
+            topics.append(info)
+        return tuple(topics)
+
+    def bag_topics(self, device):
+        return self.qos_topics(device) + self.sensor_topics(device)
 
 
 def _failure_reason(code, message):
@@ -37,7 +171,13 @@ def _sub_result(
         "device_uid": device.device_uid,
         "model": device.model,
         "serial": device.serial,
+        "mapping_confidence": getattr(device, "mapping_confidence", None),
         "status": status_override or ("PASS" if not reasons else "FAIL"),
+        "warnings": (
+            [f"Physical identity mapping is {device.mapping_confidence}; identity is not required for this test."]
+            if getattr(device, "mapping_confidence", None) in {"PARTIAL", "UNKNOWN"}
+            else []
+        ),
         "configuration": configuration or {},
         "measurements": measurements,
         "rules": rules,
@@ -58,26 +198,15 @@ class RosHandlerBase:
                 "Jetson is not connected. Connect from Dashboard first.",
             )
         devices = self.devices(context)
-        if not devices:
+        requirements = self.requirements(_definition)
+        if not devices and (requirements.requires_physical_camera or requirements.requires_physical_identity):
             raise RosBlockedError(
                 "CAMERA_NOT_FOUND",
                 "No physical camera exists in the captured target snapshot.",
             )
-        registry = context.services["ros_adapter_registry"]
-        try:
-            for device in devices:
-                registry.resolve(device)
-        except UnsupportedRosCameraAdapterError as exc:
-            raise RosBlockedError(exc.code, str(exc)) from exc
-        busy_serials = set(context.base_configuration.get("busy_serials") or ())
-        conflict = next(
-            (device for device in devices if device.serial in busy_serials), None
-        )
-        if conflict is not None:
-            raise RosBlockedError(
-                "CAMERA_BUSY",
-                f"Camera Monitor owns {conflict.model} SN{conflict.serial}; stop its stream first.",
-            )
+        # A usable production graph can validate an unknown/custom driver.  A
+        # vendor adapter is needed only for the legacy test-owned launch
+        # fallback, never as an admission condition for ROS integration.
 
     def setup(self, _context, _definition):
         self._sessions = []
@@ -113,42 +242,264 @@ class RosHandlerBase:
     def target_scope(context):
         return str(context.base_configuration.get("target_scope") or "INDIVIDUAL")
 
+    @staticmethod
+    def requirements(definition):
+        return RosTestRequirements.from_definition(definition)
+
     def environment(self, context, expected_distro="humble"):
-        devices = self.devices(context)
-        registry = context.services["ros_adapter_registry"]
-        packages = registry.required_packages(devices)
+        shared_cache = context.services.get("ros_environment_cache")
+        key = str(expected_distro or "humble")
+        if isinstance(shared_cache, dict) and key in shared_cache:
+            return shared_cache[key], ()
         manager = context.services["ros_process_manager"]
-        environment = manager.probe_environment(packages, expected_distro)
-        return environment, packages
+        try:
+            environment = manager.probe_environment((), expected_distro)
+        except RemoteOperationTimeoutError as exc:
+            diagnostics = dict(getattr(exc, "diagnostics", {}) or {})
+            operation = diagnostics.get("operation") or "ROS environment discovery"
+            timeout = diagnostics.get("timeout_s")
+            message = f"{operation} did not complete before its remote-operation deadline"
+            if isinstance(timeout, (int, float)):
+                message += f" ({timeout:g} s)"
+            raise RosBlockedError("ROS_ENVIRONMENT_TIMEOUT", message, diagnostics) from exc
+        if isinstance(shared_cache, dict) and environment.get("environment_ready"):
+            shared_cache[key] = environment
+        return environment, ()
 
     def require_runnable_environment(self, context, definition):
         expected_distro = str(definition.parameters.get("expected_distro") or "humble")
-        environment, packages = self.environment(context, expected_distro)
+        try:
+            environment, packages = self.environment(context, expected_distro)
+        except RemoteOperationTimeoutError as exc:
+            diagnostics = dict(getattr(exc, "diagnostics", {}) or {})
+            raise RosBlockedError("ROS_ENVIRONMENT_TIMEOUT", str(exc), diagnostics) from exc
+        except RosRemoteError as exc:
+            if exc.code in {"ROS_REMOTE_TIMEOUT", "ROS_OPERATION_TIMEOUT", "ROS_ENVIRONMENT_UNAVAILABLE"}:
+                diagnostics = dict(exc.payload.get("diagnostics") or {})
+                operation = diagnostics.get("operation") or "ROS environment discovery"
+                timeout = diagnostics.get("timeout_s")
+                detail = f"{operation} did not complete"
+                if isinstance(timeout, (int, float)):
+                    detail += f" within {timeout:g} s"
+                detail += f": {exc}"
+                raise RosBlockedError("ROS_ENVIRONMENT_UNAVAILABLE", detail, diagnostics) from exc
+            raise
         if not environment.get("ros2_available") or not environment.get("ros_environment_loaded"):
             raise RosBlockedError(
                 "ROS_ENVIRONMENT_UNAVAILABLE",
                 "; ".join(environment.get("errors") or ["ROS 2 environment is unavailable"]),
             )
-        if environment.get("ros_distro") != expected_distro:
+        if not environment.get("ros_distro"):
             raise RosBlockedError(
                 "ROS_ENVIRONMENT_UNAVAILABLE",
-                f"Expected ROS_DISTRO={expected_distro}, found {environment.get('ros_distro') or '-'}.",
+                "ROS_DISTRO was not set after loading the ROS environment.",
             )
         return environment, packages
+
+    def graph_discovery(self, context, environment):
+        """Return one reusable dynamic graph snapshot for the current suite."""
+        cached = context.services.get("ros_camera_graph_discovery")
+        if cached is not None:
+            return cached
+        shared_cache = context.services.get("ros_camera_graph_cache")
+        if isinstance(shared_cache, dict) and shared_cache.get("discovery") is not None:
+            discovery = shared_cache["discovery"]
+            context.services["ros_camera_graph_discovery"] = discovery
+            return discovery
+        manager = context.services["ros_process_manager"]
+        if not hasattr(manager, "discover_camera_graph"):
+            # Older/in-process test managers exercise the owned-launch fallback.
+            return None
+        try:
+            snapshot = manager.discover_camera_graph(
+                environment.get("setup_files") or (), environment.get("ros_distro") or "humble"
+            )
+        except RemoteOperationTimeoutError as exc:
+            diagnostics = dict(getattr(exc, "diagnostics", {}) or {})
+            raise RosBlockedError("ROS_GRAPH_TIMEOUT", str(exc), diagnostics) from exc
+        except RosRemoteError as exc:
+            if exc.code in {"ROS_REMOTE_TIMEOUT", "ROS_OPERATION_TIMEOUT", "ROS_ENVIRONMENT_UNAVAILABLE", "ROS_GRAPH_UNAVAILABLE"}:
+                diagnostics = dict(exc.payload.get("diagnostics") or {})
+                raise RosBlockedError("ROS_GRAPH_UNAVAILABLE", str(exc), diagnostics) from exc
+            raise
+        grouping_started = time.monotonic()
+        discovery = discover_camera_graph(snapshot, self.devices(context))
+        discovery = replace(
+            discovery,
+            stage_timings_s={
+                **discovery.stage_timings_s,
+                "candidate_grouping_and_association": round(time.monotonic() - grouping_started, 3),
+            },
+        )
+        context.services["ros_camera_graph_discovery"] = discovery
+        if isinstance(shared_cache, dict):
+            shared_cache["discovery"] = discovery
+        context.log("INFO", f"ROS graph contains {len(discovery.topic_types)} topics and {len(discovery.nodes)} nodes.")
+        context.log("INFO", f"Found {len(discovery.candidates)} camera candidate(s) from ROS message types.")
+        timings = getattr(discovery, "stage_timings_s", {})
+        if timings:
+            context.log(
+                "INFO",
+                "ROS discovery stage timing: " + ", ".join(
+                    f"{name}={value}s" for name, value in timings.items()
+                ) + ".",
+            )
+        for endpoint in discovery.candidates:
+            context.log("INFO", f"Candidate camera namespace discovered: {endpoint.namespace}.")
+            for topic in endpoint.image_topics:
+                context.log("INFO", f"{topic} -> sensor_msgs/msg/Image.")
+        for association in discovery.associations:
+            device = next(item for item in self.devices(context) if item.device_uid == association.device_uid)
+            if association.reliable:
+                context.log("INFO", f"Physical camera {device.model} SN{device.serial or '-'} associated with {association.endpoint.namespace} ({'; '.join(association.evidence)}).")
+            elif discovery.candidates:
+                context.log("WARNING", f"Unable to uniquely associate {device.model} SN{device.serial or '-'} with a ROS camera candidate (confidence={association.confidence}).")
+        return discovery
+
+    def execution_targets(self, context, definition, environment):
+        """Return the scope appropriate to this test's declared prerequisites.
+
+        Graph-only tests validate each discovered ROS camera endpoint.  They do
+        not use the physical inventory as an accidental filter.  Identity tests
+        retain the selected physical target and are blocked only if that target
+        cannot be associated reliably.
+        """
+        requirements = self.requirements(definition)
+        manager = context.services["ros_process_manager"]
+        # Older adapters/test doubles may not yet expose graph discovery.  Keep
+        # their established launch-spec path as a compatibility fallback.  A
+        # production manager which *does* support graph discovery must provide
+        # graph evidence for graph-dependent tests.
+        graph_discovery_supported = hasattr(manager, "discover_camera_graph")
+        discovery = self.graph_discovery(context, environment) if requirements.requires_ros_graph else None
+        if requirements.requires_camera_candidate:
+            if discovery is None and graph_discovery_supported:
+                raise RosBlockedError("ROS_GRAPH_UNAVAILABLE", "ROS graph discovery is unavailable for this test.")
+            if discovery is not None and not discovery.candidates:
+                raise RosBlockedError("ROS_CAMERA_CANDIDATE_UNAVAILABLE", "No valid ROS camera candidate with an Image publisher was discovered.")
+        if requirements.requires_physical_camera or requirements.requires_physical_identity:
+            self.log_prerequisites(context, definition, discovery, environment)
+            return self.devices(context)
+        if discovery is not None and requirements.requires_camera_candidate:
+            self.log_prerequisites(context, definition, discovery, environment)
+            for endpoint in discovery.candidates:
+                association = next(
+                    (item for item in discovery.associations if item.endpoint == endpoint), None
+                )
+                mapping_confidence = association.confidence if association else (
+                    "PARTIAL" if any(item.confidence == "PARTIAL" for item in discovery.associations)
+                    else "UNKNOWN" if discovery.associations else "NOT AVAILABLE"
+                )
+                if mapping_confidence in {"PARTIAL", "UNKNOWN"}:
+                    context.log(
+                        "WARNING",
+                        f"[{definition.test_id}] Physical identity mapping: {mapping_confidence}; identity is not required for this test.",
+                    )
+                context.log("INFO", f"[{definition.test_id}] Candidate: {endpoint.namespace}.")
+            targets = []
+            for endpoint in discovery.candidates:
+                association = next(
+                    (item for item in discovery.associations if item.endpoint == endpoint), None
+                )
+                confidence = association.confidence if association else (
+                    "PARTIAL" if any(item.confidence == "PARTIAL" for item in discovery.associations)
+                    else "UNKNOWN" if discovery.associations else "NOT AVAILABLE"
+                )
+                targets.append(RosCandidateTarget.from_endpoint(endpoint, confidence))
+            return tuple(targets)
+        self.log_prerequisites(context, definition, discovery, environment)
+        return self.devices(context)
+
+    def log_prerequisites(self, context, definition, discovery, environment):
+        requirements = self.requirements(definition)
+        graph_state = "PASS" if discovery is not None else (
+            "NOT REQUIRED" if not requirements.requires_ros_graph else "UNAVAILABLE"
+        )
+        candidate_state = (
+            f"PASS ({len(discovery.candidates)})" if discovery and discovery.candidates
+            else "UNAVAILABLE" if requirements.requires_camera_candidate else "NOT REQUIRED"
+        )
+        identity_state = "REQUIRED" if requirements.requires_physical_identity else "NOT REQUIRED"
+        if requirements.requires_physical_identity and discovery is not None:
+            reliable = sum(item.reliable for item in discovery.associations)
+            identity_state = f"PASS ({reliable})" if reliable else "PARTIAL / UNKNOWN"
+        context.log("INFO", f"[{definition.test_id}] Prerequisites:")
+        context.log("INFO", f"[{definition.test_id}] ROS environment {'PASS' if environment.get('ros_environment_loaded') else 'UNAVAILABLE'}.")
+        context.log("INFO", f"[{definition.test_id}] ROS graph {graph_state}.")
+        context.log("INFO", f"[{definition.test_id}] Camera candidates {candidate_state}.")
+        context.log("INFO", f"[{definition.test_id}] Physical identity {identity_state}.")
 
     def ensure_session(
         self, context, definition, device, environment, startup_timeout_s=None
     ):
-        registry = context.services["ros_adapter_registry"]
         manager = context.services["ros_process_manager"]
+        discovery = self.graph_discovery(context, environment)
+        requirements = self.requirements(definition)
+        endpoint = getattr(device, "endpoint", None)
+        if endpoint is not None:
+            adapter = DynamicRosCameraAdapter(endpoint)
+            launch_spec = adapter.build_launch_spec(device)
+            session = RosNodeSession(
+                session_id="external-candidate-" + device.device_uid,
+                device_uid=device.device_uid,
+                driver=adapter.driver,
+                namespace=launch_spec.namespace,
+                expected_node=launch_spec.expected_node,
+                selected_serial=device.serial or "",
+                owned_by_test=False,
+                setup_files=tuple(environment.get("setup_files") or ()),
+            )
+            self._sessions.append(session)
+            context.log("INFO", f"[{definition.test_id}] Continuing ROS validation for discovered candidate {endpoint.namespace}; physical identity is not required.")
+            return adapter, launch_spec, session, {
+                "process_alive": True, "node_alive": True,
+                "node_names": list(endpoint.nodes), "startup_time_s": 0.0,
+                "external_verified": True, "mapping_confidence": device.mapping_confidence,
+                "prerequisites": {
+                    "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                    "physical_identity": "NOT REQUIRED",
+                    "mapping_confidence": device.mapping_confidence,
+                },
+            }
+        association = discovery.association_for(device.device_uid) if discovery else None
+        if association and association.reliable:
+            adapter = DynamicRosCameraAdapter(association.endpoint)
+            launch_spec = adapter.build_launch_spec(device)
+            session = RosNodeSession(
+                session_id="external-" + device.device_uid,
+                device_uid=device.device_uid,
+                driver=adapter.driver,
+                namespace=launch_spec.namespace,
+                expected_node=launch_spec.expected_node,
+                selected_serial=device.serial or "",
+                owned_by_test=False,
+                setup_files=tuple(environment.get("setup_files") or ()),
+            )
+            self._sessions.append(session)
+            return adapter, launch_spec, session, {
+                "process_alive": True, "node_alive": True,
+                "node_names": list(association.endpoint.nodes), "startup_time_s": 0.0,
+                "external_verified": True, "mapping_confidence": association.confidence,
+                "mapping_evidence": list(association.evidence),
+                "prerequisites": {
+                    "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                    "physical_identity": "PASS" if requirements.requires_physical_identity else "NOT REQUIRED",
+                },
+            }
+        if requirements.requires_physical_identity and discovery and discovery.candidates:
+            raise RosBlockedError(
+                "ROS_CAMERA_MAPPING_AMBIGUOUS",
+                f"Cannot uniquely associate physical camera SN{device.serial or '-'} with a ROS runtime instance.",
+            )
+        busy_serials = set(context.base_configuration.get("busy_serials") or ())
+        if device.serial in busy_serials:
+            raise RosBlockedError(
+                "CAMERA_BUSY",
+                f"Camera Monitor owns {device.model} SN{device.serial}; stop its direct stream before a test-owned launch.",
+            )
+        registry = context.services["ros_adapter_registry"]
         adapter = registry.resolve(device)
         launch_spec = adapter.build_launch_spec(device)
-        package = (environment.get("packages") or {}).get(launch_spec.package, {})
-        if package.get("installed") is not True:
-            raise RosRemoteError(
-                "ROS_DRIVER_MISSING",
-                f"Required package {launch_spec.package} is not installed.",
-            )
         context.log(
             "INFO",
             f"[{definition.test_id}][SN{device.serial}] Starting {launch_spec.package}.",
@@ -222,20 +573,54 @@ class RosEnvironmentHandler(RosHandlerBase):
         expected = str(definition.parameters.get("expected_distro") or "humble")
         context.log("INFO", f"[{definition.test_id}] Checking ROS environment.")
         environment, packages = self.environment(context, expected)
+        discovery = self.graph_discovery(context, environment)
         driver_results = environment.get("packages") or {}
-        installed = all(
-            driver_results.get(package, {}).get("installed") is True
-            for package in packages
+        associations = discovery.associations if discovery is not None else ()
+        mapped = [item for item in associations if item.reliable]
+        graph_accessible = discovery is not None or not hasattr(
+            context.services["ros_process_manager"], "discover_camera_graph"
         )
+        publishers_discovered = (
+            any(
+                discovery.publisher_counts.get(topic, 0) > 0
+                for candidate in discovery.candidates
+                for topic in (*candidate.image_topics, *candidate.compressed_image_topics)
+            )
+            if discovery is not None else True
+        )
+        if discovery is not None and discovery.candidates and not publishers_discovered:
+            context.log("WARNING", f"[{definition.test_id}] Camera-like image topics were discovered, but no active Image publisher was reported.")
+        selected_mapped = (
+            len(mapped) == len(self.devices(context)) if discovery is not None else True
+        )
+        self.log_prerequisites(context, definition, discovery, environment)
+        if discovery is not None and not selected_mapped:
+            context.log("WARNING", f"[{definition.test_id}] Physical camera identity mapping is partial; mapping is supplemental evidence.")
         measurements = {
+            "prerequisites": {
+                "jetson": "PASS", "ros_environment": "PASS" if environment.get("ros_environment_loaded") else "FAIL",
+                "ros_graph": "PASS" if graph_accessible else "FAIL",
+                "ros_camera_candidate": "PASS" if publishers_discovered else "FAIL",
+                "physical_identity": "NOT REQUIRED",
+            },
             "jetson_connected": True,
+            "jetson_hostname": environment.get("hostname") or "UNKNOWN",
             "ros2_available": bool(environment.get("ros2_available")),
             "ros_distro": environment.get("ros_distro"),
             "ros_environment_loaded": bool(environment.get("ros_environment_loaded")),
             "required_driver_count": len(packages),
             "driver_results": driver_results,
-            "all_required_drivers_installed": installed,
+            "all_required_drivers_installed": True,
             "selected_camera_count": len(self.devices(context)),
+            "ros_graph_accessible": graph_accessible,
+            "ros_node_count": len(discovery.nodes) if discovery is not None else None,
+            "ros_topic_count": len(discovery.topic_types) if discovery is not None else None,
+            "camera_candidate_count": len(discovery.candidates) if discovery is not None else None,
+            "mapped_camera_count": len(mapped) if discovery is not None else None,
+            "unmapped_camera_count": len(self.devices(context)) - len(mapped) if discovery is not None else None,
+            "camera_publishers_discovered": publishers_discovered,
+            "selected_cameras_mapped": selected_mapped,
+            "camera_graph": discovery.to_dict() if discovery is not None else None,
             "environment_warnings": environment.get("warnings") or [],
             "fatal_environment_errors": len(environment.get("errors") or []),
             "environment_ready": bool(environment.get("environment_ready")),
@@ -243,17 +628,16 @@ class RosEnvironmentHandler(RosHandlerBase):
             "setup_files": environment.get("setup_files") or [],
         }
         context.log("INFO", f"[{definition.test_id}] ROS_DISTRO={environment.get('ros_distro') or '-'}.")
-        for package in packages:
-            found = driver_results.get(package, {}).get("installed") is True
-            context.log(
-                "INFO" if found else "FAIL",
-                f"[{definition.test_id}] {package} {'found' if found else 'missing'}.",
-            )
+        if discovery is not None and selected_mapped:
+            context.log("PASS", f"[{definition.test_id}] ROS integration verified.")
+        elif discovery is not None:
+            context.log("WARNING", f"[{definition.test_id}] Physical camera identity mapping is partial; ROS camera integration remains usable.")
         configuration = {
             "target_scope": self.target_scope(context),
             "required_packages": list(packages),
             "expected_distro": expected,
             "ros_environment": environment,
+            "camera_graph": discovery.to_dict() if discovery is not None else None,
         }
         return measurements, configuration, []
 
@@ -262,7 +646,10 @@ class RosNodeLaunchHandler(RosHandlerBase):
     def execute(self, context, definition):
         environment, _packages = self.require_runnable_environment(context, definition)
         results = []
-        for device in self.devices(context):
+        # ROS-002 declares physical identity as a prerequisite.  Routing it
+        # through execution_targets keeps that dependency explicit instead of
+        # relying on the historic, globally selected-device loop.
+        for device in self.execution_targets(context, definition, environment):
             context.checkpoint(time.monotonic())
             failures = []
             session = None
@@ -284,6 +671,10 @@ class RosNodeLaunchHandler(RosHandlerBase):
                     for item in launch_spec.arguments
                 )
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "PASS" if self.requirements(definition).requires_physical_identity else "NOT REQUIRED",
+                    }),
                     "device_uid": device.device_uid,
                     "model": device.model,
                     "serial": device.serial,
@@ -314,6 +705,10 @@ class RosNodeLaunchHandler(RosHandlerBase):
             except RosRemoteError as exc:
                 failures.append(_failure_reason(exc.code, str(exc)))
                 measurements = {
+                    "prerequisites": {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "PASS" if self.requirements(definition).requires_physical_identity else "NOT REQUIRED",
+                    },
                     "device_uid": device.device_uid,
                     "model": device.model,
                     "serial": device.serial,
@@ -391,7 +786,7 @@ class RosTopicHealthHandler(RosHandlerBase):
         environment, _packages = self.require_runnable_environment(context, definition)
         results = []
         manager = context.services["ros_process_manager"]
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             session = None
             result = None
             failures = []
@@ -402,10 +797,14 @@ class RosTopicHealthHandler(RosHandlerBase):
                 if not status.get("node_alive"):
                     code = "ROS_NODE_EXITED" if not status.get("process_alive") else "ROS_NODE_TIMEOUT"
                     raise RosRemoteError(code, "Required ROS camera node is not alive.")
+                requirements = tuple(
+                    item for item in adapter.mandatory_topics(device)
+                    if item.availability == "MANDATORY"
+                )
                 collection = manager.collect(
                     session,
                     spec,
-                    adapter.mandatory_topics(device),
+                    requirements,
                     float(definition.parameters.get("warmup_s") or 1),
                     float(definition.parameters.get("topic_timeout_s") or 8),
                     1,
@@ -415,10 +814,21 @@ class RosTopicHealthHandler(RosHandlerBase):
                 invalid_types = [name for name, item in topics.items() if not item.get("type_matches")]
                 no_publishers = [name for name, item in topics.items() if int(item.get("publisher_count") or 0) < 1]
                 timeouts = [name for name, item in topics.items() if not item.get("message_received")]
+                endpoint = getattr(device, "endpoint", None)
+                if endpoint is not None:
+                    images = endpoint.image_topics or endpoint.compressed_image_topics
+                    context.log("INFO", f"[{definition.test_id}] Candidate: {endpoint.namespace}.")
+                    for topic_name in images:
+                        item = topics.get(topic_name, {})
+                        context.log("INFO", f"[{definition.test_id}] Image topic {topic_name}; type={item.get('type') or 'UNKNOWN'}; publishers={item.get('publisher_count', 0)}.")
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "NOT REQUIRED",
+                    }),
                     "node_alive": True,
                     "namespace": spec.namespace,
-                    "mandatory_topic_count": len(spec.mandatory_topics),
+                    "mandatory_topic_count": len(requirements),
                     "topics": topics,
                     "missing_topics": missing,
                     "invalid_types": invalid_types,
@@ -481,7 +891,7 @@ class RosImageProfileHandler(RosHandlerBase):
         results = []
         manager = context.services["ros_process_manager"]
         fps_ratio_min = float(definition.parameters.get("fps_ratio_min") or 0.95)
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             session = None
             result = None
             failures = []
@@ -507,8 +917,13 @@ class RosImageProfileHandler(RosHandlerBase):
                 topic = (collection.get("topics") or {}).get(spec.primary_image_topic, {})
                 profile = spec.requested_profile
                 calculated_fps = float(topic.get("calculated_fps") or 0)
-                fps_ratio = calculated_fps / profile.fps if profile.fps else 0.0
+                dynamic_profile = adapter.driver == DynamicRosCameraAdapter.driver
+                fps_ratio = calculated_fps / profile.fps if profile.fps else None
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "NOT REQUIRED",
+                    }),
                     "node_alive": True,
                     "topic": spec.primary_image_topic,
                     "message_type": topic.get("type"),
@@ -517,7 +932,7 @@ class RosImageProfileHandler(RosHandlerBase):
                     "width": topic.get("width"),
                     "height": topic.get("height"),
                     "encoding": topic.get("encoding"),
-                    "encoding_supported": topic.get("encoding") in profile.encodings,
+                    "encoding_supported": bool(topic.get("encoding")) if dynamic_profile else topic.get("encoding") in profile.encodings,
                     "step": topic.get("step"),
                     "frame_id": topic.get("frame_id"),
                     "sample_count": topic.get("sample_count", 0),
@@ -527,29 +942,39 @@ class RosImageProfileHandler(RosHandlerBase):
                     "duration_s": topic.get("duration_s", 0),
                     "calculated_fps": calculated_fps,
                     "host_receive_fps": topic.get("host_receive_fps"),
-                    "configured_fps": profile.fps,
-                    "fps_ratio": round(fps_ratio, 6),
+                    "configured_fps": profile.fps or None,
+                    "fps_ratio": round(fps_ratio, 6) if fps_ratio is not None else None,
                     "owned_by_test": session.owned_by_test,
                 }
                 if not measurements["topic_exists"]:
                     failures.append(_failure_reason("ROS_TOPIC_MISSING", spec.primary_image_topic))
                 elif not measurements["message_received"]:
                     failures.append(_failure_reason("ROS_TOPIC_TIMEOUT", spec.primary_image_topic))
-                if measurements["width"] != profile.width or measurements["height"] != profile.height:
+                if dynamic_profile and (not measurements["width"] or not measurements["height"]):
+                    failures.append(_failure_reason("ROS_IMAGE_INVALID", "Discovered image samples have no valid runtime resolution."))
+                elif not dynamic_profile and (measurements["width"] != profile.width or measurements["height"] != profile.height):
                     failures.append(_failure_reason("ROS_PROFILE_MISMATCH", "Actual image resolution differs from the requested ROS profile."))
                 if not measurements["encoding_supported"]:
                     failures.append(_failure_reason("ROS_PROFILE_MISMATCH", "Actual image encoding is not supported by the adapter profile."))
-                if fps_ratio < fps_ratio_min:
+                if not dynamic_profile and fps_ratio < fps_ratio_min:
                     failures.append(_failure_reason("ROS_FPS_BELOW_THRESHOLD", f"Measured FPS ratio {fps_ratio:.3f} is below {fps_ratio_min:.3f}."))
                 rules = [
                     {"metric": "topic_exists", "operator": "==", "expected": True},
                     {"metric": "message_received", "operator": "==", "expected": True},
-                    {"metric": "width", "operator": "==", "expected": profile.width},
-                    {"metric": "height", "operator": "==", "expected": profile.height},
                     {"metric": "encoding_supported", "operator": "==", "expected": True},
-                    {"metric": "fps_ratio", "operator": ">=", "expected": fps_ratio_min},
                     {"metric": "timestamp_rollback_count", "operator": "==", "expected": 0},
                 ]
+                if dynamic_profile:
+                    rules.extend((
+                        {"metric": "width", "operator": ">", "expected": 0},
+                        {"metric": "height", "operator": ">", "expected": 0},
+                    ))
+                else:
+                    rules.extend((
+                        {"metric": "width", "operator": "==", "expected": profile.width},
+                        {"metric": "height", "operator": "==", "expected": profile.height},
+                        {"metric": "fps_ratio", "operator": ">=", "expected": fps_ratio_min},
+                    ))
                 result = _sub_result(
                     device,
                     measurements,
@@ -624,8 +1049,30 @@ class RosCameraInfoHandler(RosHandlerBase):
         environment, _packages = self.require_runnable_environment(context, definition)
         results = []
         manager = context.services["ros_process_manager"]
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             context.checkpoint(time.monotonic())
+            endpoint = getattr(device, "endpoint", None)
+            if endpoint is not None and not endpoint.camera_info_topics:
+                measurements = {
+                    "prerequisites": {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "camera_info_capability": "NOT APPLICABLE",
+                        "physical_identity": "NOT REQUIRED",
+                    },
+                    "capability_status": "NOT_APPLICABLE",
+                    "camera_info_available": False,
+                    "camera_info_topic": None,
+                    "reason": "This ROS camera candidate does not advertise CameraInfo.",
+                }
+                result = _sub_result(
+                    device, measurements,
+                    [{"metric": "camera_info_available", "operator": "==", "expected": False}],
+                    {"namespace": endpoint.namespace},
+                )
+                result["status"] = "PASS"
+                results.append(result)
+                context.log("INFO", f"[{definition.test_id}] {endpoint.namespace}: CameraInfo NOT APPLICABLE (capability not advertised).")
+                continue
             session = None
             result = None
             failures = []
@@ -680,6 +1127,10 @@ class RosCameraInfoHandler(RosHandlerBase):
                 )
                 rollback_count = image_rollback_count + camera_info_rollback_count
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "NOT REQUIRED",
+                    }),
                     "image": {
                         "topic": image.get("topic_name"),
                         "width": image.get("width"),
@@ -806,7 +1257,7 @@ class RosSensorTopicsHandler(RosHandlerBase):
         environment, _packages = self.require_runnable_environment(context, definition)
         results = []
         manager = context.services["ros_process_manager"]
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             context.checkpoint(time.monotonic())
             session = None
             result = None
@@ -818,6 +1269,30 @@ class RosSensorTopicsHandler(RosHandlerBase):
                 if not status.get("node_alive"):
                     raise RosRemoteError("ROS_NODE_TIMEOUT", "Required ROS camera node is not alive.")
                 requirements = adapter.sensor_topics(device)
+                if not requirements and getattr(device, "endpoint", None) is not None:
+                    endpoint = device.endpoint
+                    measurements = {
+                        "prerequisites": status.get("prerequisites", {
+                            "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                            "physical_identity": "NOT REQUIRED",
+                        }),
+                        "capability_status": "NOT_APPLICABLE",
+                        "sensor_capabilities": [],
+                        "sensor_topics": [],
+                        "imu_availability": "NOT_APPLICABLE",
+                        "temperature_availability": "NOT_APPLICABLE",
+                        "reason": "No IMU or temperature publisher is advertised by this camera candidate.",
+                        "owned_by_test": session.owned_by_test,
+                    }
+                    result = _sub_result(
+                        device, measurements,
+                        [{"metric": "capability_status", "operator": "==", "expected": "NOT_APPLICABLE"}],
+                        spec.to_dict(),
+                    )
+                    result["status"] = "PASS"
+                    context.log("INFO", f"[{definition.test_id}] {endpoint.namespace}: sensor checks NOT APPLICABLE (no supported sensor topic discovered).")
+                    results.append(result)
+                    continue
                 collection = manager.collect_capabilities(
                     session, spec, requirements,
                     float(definition.parameters.get("warmup_s") or 0.5),
@@ -863,6 +1338,10 @@ class RosSensorTopicsHandler(RosHandlerBase):
                         if non_finite:
                             failures.append(_failure_reason("ROS_SENSOR_INVALID_VALUE", record.get("topic_name") or requirement.suffix))
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "NOT REQUIRED",
+                    }),
                     "sensor_capabilities": [item.to_dict(spec.namespace) for item in requirements],
                     "sensor_topics": topic_records,
                     "mandatory_sensor_topics_valid": mandatory_valid,
@@ -915,7 +1394,7 @@ class RosQosMatrixHandler(RosHandlerBase):
         environment, _packages = self.require_runnable_environment(context, definition)
         results = []
         manager = context.services["ros_process_manager"]
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             context.checkpoint(time.monotonic())
             session = None
             result = None
@@ -958,6 +1437,10 @@ class RosQosMatrixHandler(RosHandlerBase):
                 if not negative_valid:
                     failures.append(_failure_reason("ROS_QOS_VALIDATION_FAILED", "Negative QoS behavior did not match request/offered expectations."))
                 measurements = {
+                    "prerequisites": status.get("prerequisites", {
+                        "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                        "physical_identity": "NOT REQUIRED",
+                    }),
                     "qos_matrix": matrix,
                     "publisher_qos_discovered": discovered,
                     "qos_discovery_failed_topics": missing_publishers,
@@ -1064,7 +1547,7 @@ class RosBagIntegrityHandler(RosHandlerBase):
         manager = context.services["ros_process_manager"]
         record_duration = float(definition.parameters.get("record_duration_s") or 15)
         replay_timeout = float(definition.parameters.get("replay_timeout_s") or 12)
-        for device in self.devices(context):
+        for device in self.execution_targets(context, definition, environment):
             context.checkpoint(time.monotonic())
             camera_session = None
             spec = None
@@ -1074,6 +1557,10 @@ class RosBagIntegrityHandler(RosHandlerBase):
             failures = []
             cleanup_success = True
             measurements = {
+                "prerequisites": {
+                    "ros_graph": "PASS", "ros_camera_candidate": "PASS",
+                    "physical_identity": "NOT REQUIRED",
+                },
                 "host_evidence_result_path": str(
                     context.result_root + "/" + definition.test_id + "/result.json"
                 ),

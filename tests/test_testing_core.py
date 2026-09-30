@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.testing.definitions import load_definitions
-from core.testing.errors import DefinitionValidationError, TestCancelledError
+from core.testing.errors import DefinitionValidationError, TestCancelledError, TestTimeoutError
 from core.testing.evaluator import TestEvaluator
 from core.testing.models import TestCaseDefinition, TestContext, TestStatus
 from core.testing.registry import TestRegistry
@@ -71,6 +71,44 @@ class CoreTestingTests(unittest.TestCase):
             self.assertEqual(result.status, TestStatus.ERROR)
             self.assertEqual(result.error["code"], "TEST_TIMEOUT")
             self.assertTrue(handler.cleaned)
+
+    def test_internal_attribute_error_preserves_source_and_traceback_evidence(self):
+        class BrokenHandler(Handler):
+            def execute(self, context, definition):
+                raise AttributeError("CameraCandidate has no attribute 'image_topics'")
+
+        with tempfile.TemporaryDirectory() as root:
+            registry = TestRegistry(); registry.register("broken", BrokenHandler({}))
+            definition = TestCaseDefinition("BROKEN", "Broken", "Core", "broken", "P0", 5)
+            result = TestRunner(registry, TestEvaluator()).run_one(
+                definition, TestContext({}, {}, {}, root)
+            )
+            self.assertEqual(result.status, TestStatus.ERROR)
+            self.assertEqual(result.error["exception_type"], "AttributeError")
+            self.assertEqual(result.error["source_file"], __file__)
+            self.assertIn("CameraCandidate has no attribute", result.error["traceback"])
+
+    def test_remote_operation_timeout_preserves_operation_and_deadline(self):
+        class TimedOutHandler(Handler):
+            def execute(self, context, definition):
+                error = TestTimeoutError("Shared Jetson operation 'camera_ros_environment' timed out")
+                error.diagnostics = {
+                    "operation": "camera_ros_environment",
+                    "timeout_s": 15,
+                    "elapsed_s": 15.001,
+                    "stage": "waiting for shared Jetson operation result",
+                }
+                raise error
+
+        with tempfile.TemporaryDirectory() as root:
+            registry = TestRegistry(); registry.register("timed", TimedOutHandler({}))
+            definition = TestCaseDefinition("TIMED", "Timed", "Core", "timed", "P0", 30)
+            result = TestRunner(registry, TestEvaluator()).run_one(
+                definition, TestContext({}, {}, {}, root)
+            )
+            self.assertEqual(result.status, TestStatus.ERROR)
+            self.assertEqual(result.error["diagnostics"]["operation"], "camera_ros_environment")
+            self.assertEqual(result.error["diagnostics"]["timeout_s"], 15)
 
     def test_definition_validation_and_rf_data(self):
         registry = TestRegistry()

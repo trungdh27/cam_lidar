@@ -1,20 +1,29 @@
 [
   {
     "id": "ROS-001",
-    "name": "ROS 2 Environment and Camera Driver Verification",
+    "name": "ROS 2 Environment and Camera Integration Discovery",
     "group": "Robot Application / ROS2",
     "automation_key": "ros.environment",
     "priority": "P0",
     "timeout_s": 30,
     "parameters": {
-      "expected_distro": "humble"
+      "expected_distro": "humble",
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "jetson_connected", "operator": "==", "expected": true},
       {"metric": "ros2_available", "operator": "==", "expected": true},
       {"metric": "ros_environment_loaded", "operator": "==", "expected": true},
-      {"metric": "ros_distro", "operator": "==", "expected": "humble"},
-      {"metric": "all_required_drivers_installed", "operator": "==", "expected": true},
+      {"metric": "ros_graph_accessible", "operator": "==", "expected": true},
+      {"metric": "camera_publishers_discovered", "operator": "==", "expected": true},
       {"metric": "fatal_environment_errors", "operator": "==", "expected": 0}
     ]
   },
@@ -27,7 +36,16 @@
     "timeout_s": 50,
     "parameters": {
       "expected_distro": "humble",
-      "startup_timeout_s": 25
+      "startup_timeout_s": 25,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": true,
+      "requires_physical_identity": true,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": []
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}
@@ -44,7 +62,16 @@
       "expected_distro": "humble",
       "startup_timeout_s": 25,
       "warmup_s": 1,
-      "topic_timeout_s": 8
+      "topic_timeout_s": 8,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": ["image"]
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}
@@ -63,7 +90,16 @@
       "warmup_s": 2,
       "sample_count": 100,
       "measurement_timeout_s": 10,
-      "fps_ratio_min": 0.95
+      "fps_ratio_min": 0.95,
+      "requires_jetson": true,
+      "requires_ros_environment": true,
+      "requires_ros_graph": true,
+      "requires_camera_candidate": true,
+      "requires_physical_camera": false,
+      "requires_physical_identity": false,
+      "requires_controllable_node": false,
+      "requires_model_capability": false,
+      "required_capabilities": ["image"]
     },
     "rules": [
       {"metric": "all_devices_pass", "operator": "==", "expected": true}

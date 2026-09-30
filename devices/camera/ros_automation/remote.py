@@ -1,5 +1,7 @@
 import json
 import shlex
+import subprocess
+import time
 import uuid
 
 from devices.camera.ros_automation.jetson_ros_manager import JETSON_ROS_MANAGER
@@ -23,13 +25,51 @@ class RemoteRosCameraService:
             json.dumps(request, separators=(",", ":"))
         )
         timeout = float(payload.get("remote_timeout_s") or 15)
-        result = await ssh.run(command, timeout=timeout)
-        response = self._parse(result.stdout)
+        started = time.monotonic()
+        try:
+            result = await ssh.run(command, timeout=timeout)
+        except Exception as exc:
+            elapsed = round(time.monotonic() - started, 3)
+            timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) or "timeout" in type(exc).__name__.lower()
+            diagnostics = {
+                "operation": action,
+                "command": f"python3 <embedded ROS manager> action={action}",
+                "timeout_s": timeout,
+                "duration_s": elapsed,
+                "exception_type": type(exc).__name__,
+                "return_code": None,
+                "stdout_summary": None,
+                "stderr_summary": None,
+            }
+            raise RosRemoteError(
+                "ROS_REMOTE_TIMEOUT" if timed_out else "ROS_REMOTE_COMMAND_FAILED",
+                f"{type(exc).__name__}: {exc}", diagnostics,
+            ) from exc
+        duration = round(time.monotonic() - started, 3)
+        try:
+            response = self._parse(result.stdout)
+        except RosRemoteError as exc:
+            exc.payload.update({
+                "operation": action,
+                "command": f"python3 <embedded ROS manager> action={action}",
+                "timeout_s": timeout,
+                "duration_s": duration,
+                "return_code": getattr(result, "exit_status", None),
+                "stderr_summary": str(getattr(result, "stderr", "") or "")[-1200:],
+            })
+            raise
+        response.setdefault("diagnostics", {}).setdefault("remote_duration_s", duration) if isinstance(response.get("diagnostics", {}), dict) else None
         if not response.get("ok"):
+            diagnostics = dict(response.get("diagnostics") or {})
+            diagnostics.setdefault("operation", action)
+            diagnostics.setdefault("command", f"python3 <embedded ROS manager> action={action}")
+            diagnostics.setdefault("timeout_s", timeout)
+            diagnostics.setdefault("duration_s", duration)
+            diagnostics.setdefault("return_code", getattr(result, "exit_status", None))
             raise RosRemoteError(
                 str(response.get("error_type") or "ROS_PROBE_ERROR"),
                 str(response.get("error") or "Remote ROS operation failed"),
-                response,
+                {**response, "diagnostics": diagnostics},
             )
         return response
 
@@ -87,6 +127,19 @@ class RosRemoteProcessManager:
             15,
         )
         return response["environment"]
+
+    def discover_camera_graph(self, setup_files=(), expected_distro="humble", timeout_s=10):
+        """Read the live ROS graph without launching or modifying a camera."""
+        response = self._call(
+            "camera_graph",
+            {
+                "setup_files": list(setup_files),
+                "expected_distro": expected_distro,
+                "remote_timeout_s": timeout_s,
+            },
+            timeout_s + 3,
+        )
+        return response["graph"]
 
     def start_node(self, device, launch_spec, setup_files):
         response = self._call(

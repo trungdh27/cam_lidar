@@ -17,6 +17,7 @@ class CameraStreamController(QObject):
         self.payload = None
         self.pending_request_id = None
         self.pending_action = None
+        self.stop_requested = False
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self._poll)
@@ -29,12 +30,15 @@ class CameraStreamController(QObject):
 
     def start(self, payload):
         self.payload = dict(payload)
+        self.stop_requested = False
         self._submit("start_stream")
 
     def stop(self):
         self.timer.stop()
         if self.payload:
-            self._submit("stop_stream")
+            self.stop_requested = True
+            if self.pending_request_id is None:
+                self._submit("stop_stream")
 
     def stop_for_shutdown(self):
         """Best-effort asynchronous stop queued before service shutdown."""
@@ -52,6 +56,8 @@ class CameraStreamController(QObject):
         if self.pending_request_id is not None:
             return False
         if not self.jetson_service.is_connected:
+            if action == "stop_stream":
+                self.stop_requested = False
             self.failed.emit(action, "Jetson is not connected. Connect from Dashboard first.")
             return False
         request_id = self.jetson_service.submit_operation(
@@ -59,6 +65,8 @@ class CameraStreamController(QObject):
             lambda ssh: self.camera_service.execute_with_ssh(ssh, action, self.payload),
         )
         if request_id is None:
+            if action == "stop_stream":
+                self.stop_requested = False
             self.failed.emit(action, "Jetson is not connected.")
             return False
         self.pending_request_id, self.pending_action = request_id, action
@@ -78,12 +86,18 @@ class CameraStreamController(QObject):
             if status:
                 self.metrics_received.emit(status)
             self.payload = None
+            self.stop_requested = False
             self.stopped.emit(result)
         elif action == "preview_fallback":
-            self.preview_fallback_ready.emit()
+            if self.stop_requested:
+                self._submit("stop_stream")
+            else:
+                self.preview_fallback_ready.emit()
         else:
             status = result.get("status", {})
-            if status.get("state") in ("failed", "stopped") or not status.get("process_alive", True):
+            if self.stop_requested:
+                self._submit("stop_stream")
+            elif status.get("state") in ("failed", "stopped") or not status.get("process_alive", True):
                 self.timer.stop()
                 self.failed.emit("stream_status", status.get("last_error") or "Remote stream worker exited.")
             else:
@@ -96,4 +110,9 @@ class CameraStreamController(QObject):
         self.pending_request_id = self.pending_action = None
         if action in ("start_stream", "stream_status"):
             self.timer.stop()
+        if self.stop_requested and action in ("stream_status", "preview_fallback"):
+            self._submit("stop_stream")
+            return
+        if action == "stop_stream":
+            self.stop_requested = False
         self.failed.emit(action, error)

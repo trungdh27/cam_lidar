@@ -5,6 +5,7 @@ from dataclasses import replace
 from devices.camera.discovery import (
     AdapterDiscoveryResult,
     normalize_realsense_device,
+    normalize_ros_camera_device,
     normalize_zed_device,
 )
 from devices.camera.inventory import (
@@ -12,7 +13,9 @@ from devices.camera.inventory import (
     CameraTargetSelection,
     deduplicate_camera_devices,
 )
+from devices.camera.profiles import profile_id_for_camera
 from devices.camera.models import (
+    CameraAccessMode,
     CameraPhysicalStatus,
     CameraRosReadiness,
     UsbSpeed,
@@ -69,6 +72,65 @@ def _d435i(serial="123456789", usb="2.1", profiles=None):
 
 
 class CameraNormalizationTests(unittest.TestCase):
+    def test_direct_sdk_camera_keeps_direct_access_mode(self):
+        device = _zed("ZED X Mini", "12345678")
+        self.assertEqual(device.access_mode, CameraAccessMode.DIRECT_SDK)
+        self.assertTrue(device.direct_sdk_available)
+
+    def test_explorer_not_available_is_physical_busy_not_missing(self):
+        device = normalize_zed_device({
+            "model": "ZED X Mini", "serial_number": "53204228",
+            "state": "NOT AVAILABLE", "device_path": "/dev/i2c-9", "port": "1",
+            "interface": "GMSL", "api": "ZED_Explorer --all",
+        })
+        self.assertTrue(device.physical_detected)
+        self.assertFalse(device.direct_sdk_available)
+        self.assertTrue(device.busy)
+        self.assertEqual(device.device_uid, "stereolabs:53204228")
+
+    def test_explorer_available_xone_uhd_retains_direct_physical_device(self):
+        device = normalize_zed_device({
+            "model": "ZED XOne UHD", "serial_number": "315369161",
+            "state": "AVAILABLE", "device_path": "/dev/i2c-10", "port": "3",
+            "interface": "GMSL", "api": "ZED_Explorer --all",
+        })
+        self.assertEqual(device.model, "ZED X One 4K")
+        self.assertEqual(device.metadata["sdk_model"], "ZED XOne UHD")
+        self.assertTrue(device.direct_sdk_available)
+        self.assertEqual(device.access_mode, CameraAccessMode.DIRECT_SDK)
+
+    def test_hardware_model_maps_to_compatible_profile_not_normalized_id(self):
+        self.assertEqual(profile_id_for_camera(_d435i()), "realsense_d435i")
+        self.assertEqual(profile_id_for_camera(_zed("ZED X One 4K", "1")), "zed_x_one_4k")
+        self.assertIsNone(profile_id_for_camera(_zed("ZED X One", "2")))
+
+    def test_production_ros_device_info_is_runtime_authority(self):
+        device = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini",
+            "serial_number": "53204228", "driver_name": "ZED SDK",
+            "driver_version": "5.4.1", "input_type": "GMSL",
+            "resolution": "1920x1080", "target_fps": "60.000000",
+            "firmware_version": "2001", "capabilities": "left,right,depth",
+            "ros_node": "/sensors/zed_x_mini",
+            "device_info_topic": "/sensors/camera/zed_x_mini/device_info",
+            "rgb_topic": "/sensors/camera/zed_x_mini/rgb",
+            "stream_active": True,
+        })
+        self.assertEqual(device.device_uid, "stereolabs:53204228")
+        self.assertEqual(device.access_mode, CameraAccessMode.ROS_READ_ONLY)
+        self.assertTrue(device.busy)
+        self.assertTrue(device.stream_active)
+        self.assertEqual(device.metadata["resolution"], "1920x1080")
+        self.assertEqual(device.metadata["target_fps"], "60.000000")
+
+    def test_ros_topic_without_messages_is_discovered_but_not_monitorable(self):
+        device = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "53204228",
+            "ros_node": "/sensors/zed_x_mini", "rgb_topic": "/sensors/camera/zed_x_mini/rgb",
+            "stream_active": False,
+        })
+        self.assertEqual(device.access_mode, CameraAccessMode.UNAVAILABLE)
+        self.assertFalse(device.stream_active)
     def test_zed_x_mini_normalization_and_ros_mapping(self):
         device = _zed("ZED X Mini", "12345678")
         self.assertEqual(device.model, "ZED X Mini")
@@ -169,6 +231,62 @@ class CameraNormalizationTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(len(result[0].stream_profiles), 1)
 
+    def test_physical_and_production_ros_observations_reconcile_by_runtime_serial(self):
+        physical = _zed("ZED X Mini", "53204228")
+        ros = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "53204228",
+            "ros_node": "/sensors/zed_x_mini", "rgb_topic": "/sensors/camera/zed_x_mini/rgb",
+            "stream_active": True,
+        })
+        merged = deduplicate_camera_devices((physical, ros))
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].serial, "53204228")
+        self.assertEqual(merged[0].access_mode, CameraAccessMode.ROS_READ_ONLY)
+        self.assertFalse(merged[0].direct_sdk_available)
+
+    def test_current_robot_physical_zeds_and_optional_ros_enrichment_make_three_devices(self):
+        mini_physical = normalize_zed_device({
+            "model": "ZED X Mini", "serial_number": "53204228", "state": "NOT AVAILABLE",
+            "device_path": "/dev/i2c-9", "port": "1", "interface": "GMSL",
+        })
+        mini_ros = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "53204228",
+            "ros_node": "/sensors/zed_x_mini", "device_info_topic": "/sensors/camera/zed_x_mini/device_info",
+            "rgb_topic": "/sensors/camera/zed_x_mini/rgb", "stream_active": True,
+        })
+        one_physical = normalize_zed_device({
+            "model": "ZED XOne UHD", "serial_number": "315369161", "state": "AVAILABLE",
+            "device_path": "/dev/i2c-10", "port": "3", "interface": "GMSL",
+        })
+        # A device_info topic without a bounded message is only namespace
+        # enrichment; it cannot replace the physical X One identity.
+        one_ros_incomplete = normalize_ros_camera_device({
+            "ros_node": "/sensors/zed_x_one_s",
+            "ros_camera_name": "zed_x_one_s",
+            "device_info_topic": "/sensors/camera/zed_x_one_s/device_info",
+            "rgb_topic": "/sensors/camera/zed_x_one_s/rgb", "stream_active": True,
+        })
+        devices = deduplicate_camera_devices((mini_physical, mini_ros, one_physical, one_ros_incomplete, _d435i("242322076751")))
+        self.assertEqual(len(devices), 3)
+        by_serial = {item.serial: item for item in devices}
+        self.assertEqual(by_serial["53204228"].access_mode, CameraAccessMode.ROS_READ_ONLY)
+        self.assertEqual(by_serial["53204228"].ros_node, "/sensors/zed_x_mini")
+        self.assertEqual(by_serial["315369161"].access_mode, CameraAccessMode.DIRECT_SDK)
+        self.assertEqual(by_serial["315369161"].physical_port, "/dev/i2c-10")
+
+    def test_two_same_model_cameras_with_different_serials_remain_distinct(self):
+        devices = deduplicate_camera_devices((
+            normalize_ros_camera_device({
+                "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "111",
+                "rgb_topic": "/sensors/camera/one/rgb", "stream_active": True,
+            }),
+            normalize_ros_camera_device({
+                "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "222",
+                "rgb_topic": "/sensors/camera/two/rgb", "stream_active": True,
+            }),
+        ))
+        self.assertEqual({device.serial for device in devices}, {"111", "222"})
+
 
 class CameraInventoryTests(unittest.TestCase):
     def test_multiple_cameras_are_returned(self):
@@ -182,6 +300,27 @@ class CameraInventoryTests(unittest.TestCase):
         snapshot = asyncio.run(inventory.discover_all(object()))
         self.assertEqual(len(snapshot.devices), 3)
         self.assertEqual({item.serial for item in snapshot.devices}, {"1", "2", "3"})
+        self.assertEqual(snapshot.raw_candidate_count, 3)
+        self.assertEqual(len(snapshot.adapter_candidates["mock"]), 3)
+
+    def test_zed_ros_and_realsense_candidates_remain_separate(self):
+        zed_mini = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X Mini", "serial_number": "111",
+            "ros_node": "/sensors/zed_x_mini", "rgb_topic": "/sensors/camera/zed_x_mini/rgb",
+            "stream_active": True,
+        })
+        zed_one = normalize_ros_camera_device({
+            "vendor": "Stereolabs", "model": "ZED X One 4K", "serial_number": "222",
+            "ros_node": "/sensors/zed_x_one_s", "rgb_topic": "/sensors/camera/zed_x_one_s/rgb",
+            "stream_active": True,
+        })
+        inventory = CameraInventory(
+            adapters=[_Adapter("production_ros", (zed_mini, zed_one)), _Adapter("realsense", (_d435i("333"),))],
+            driver_probe=_DriverProbe(),
+        )
+        snapshot = asyncio.run(inventory.discover_all(object()))
+        self.assertEqual(len(snapshot.devices), 3)
+        self.assertEqual({item.serial for item in snapshot.devices}, {"111", "222", "333"})
 
     def test_one_adapter_failure_does_not_discard_other_vendor(self):
         inventory = CameraInventory(

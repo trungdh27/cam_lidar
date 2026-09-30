@@ -2,6 +2,8 @@ import time
 
 from core.testing.errors import TestBlockedError
 from core.testing.evaluator import TestEvaluator
+from devices.camera.models import camera_automation_identity
+from devices.camera.profiles import get_camera_profile
 
 
 class CameraHandlerBase:
@@ -10,16 +12,75 @@ class CameraHandlerBase:
 
     def validate(self, context, definition):
         client = context.services["remote_client"]
+        identity = camera_automation_identity(context.device)
+        context.device.update(identity)
+        profile_id = context.device.get("profile_id")
+        serial = context.device.get("serial")
+        try:
+            profile = get_camera_profile(profile_id)
+        except (KeyError, TypeError):
+            profile = None
+        is_zed_profile = bool(profile and profile.backend == "zed")
+        if is_zed_profile and (not serial or not str(serial).isdigit()):
+            message = (
+                "Invalid automation camera identity: "
+                f"device_uid={identity['device_uid'] or '-'} "
+                f"serial={serial or '-'}; ZED serial must contain digits only."
+            )
+            error = ValueError(message)
+            error.diagnostics = {
+                "device_uid": identity["device_uid"],
+                "serial": serial,
+                "profile_id": profile_id,
+                "stage": "camera identity validation before remote execution",
+            }
+            raise error
+        stream_active = bool(context.base_configuration.get("manual_stream_active"))
+        prerequisites = {
+            "jetson_connected": "PASS" if client.connected else "FAIL",
+            "camera_detected": "PASS" if serial else "FAIL",
+            "camera_selected": "PASS" if is_zed_profile else "FAIL",
+            "stream_active": "YES" if stream_active else "NO",
+            "exclusive_sdk_access_available": "FAIL" if stream_active else "PASS",
+        }
+        reason = None
         if not client.connected:
-            raise TestBlockedError("Jetson is not connected. Connect Jetson from Dashboard first.")
-        if context.base_configuration.get("manual_stream_active"):
-            raise TestBlockedError("Stop the active Camera stream before running automated tests.")
-        if not context.base_configuration.get("camera_connected"):
-            raise TestBlockedError("Connect and validate the Camera before running automated tests.")
-        if not context.device.get("serial"):
-            raise TestBlockedError("No discovered Camera serial number is available.")
-        if context.device.get("profile_id") != "zed_x_one_4k":
-            raise TestBlockedError("Phase 8.1A requires the ZED X One 4K profile.")
+            reason = "Jetson is not connected. Connect Jetson from Dashboard first."
+        elif not serial:
+            reason = "No discovered Camera serial number is available."
+        elif not is_zed_profile:
+            reason = "Select a compatible ZED Direct SDK camera before running these tests."
+        elif stream_active:
+            reason = (
+                "Camera is currently streaming in MONITOR. Stop the active stream "
+                "before running exclusive Direct SDK automation."
+            )
+        if reason:
+            _raise_prerequisite_block(reason, prerequisites)
+
+        # Check each case against the selected camera's supported stream modes.
+        # This lets shared tests run on X Mini/X while preserving a clear
+        # per-case BLOCKED result for modes such as 4K that the selected model
+        # cannot produce.
+        key = definition.parameters.get("resolution_key")
+        fps_values = definition.parameters.get("fps_values") or ()
+        if key and definition.automation_key != "camera.invalid_config":
+            stream = next((item for item in profile.stream_profiles if item.key == key), None)
+            supported = bool(stream) and all(int(fps) in stream.fps for fps in fps_values)
+            if not supported:
+                available = ", ".join(
+                    f"{item.key} @ {', '.join(map(str, item.fps))} FPS"
+                    for item in profile.stream_profiles
+                )
+                reason = (
+                    f"{profile.display_name} does not support {key} @ "
+                    f"{', '.join(map(str, fps_values)) or 'unspecified'} FPS. "
+                    f"Supported modes: {available}."
+                )
+                prerequisites["requested_configuration_supported"] = "FAIL"
+                _raise_prerequisite_block(reason, prerequisites)
+            prerequisites["requested_configuration_supported"] = "PASS"
+        context.base_configuration["camera_prerequisites"] = prerequisites
 
     def setup(self, context, definition):
         self.stream_active = False
@@ -31,12 +92,13 @@ class CameraHandlerBase:
 
     @staticmethod
     def _base_payload(context):
+        identity = camera_automation_identity(context.device)
         return {
-            "profile_id": context.device["profile_id"], "execution_host": "Jetson",
-            "device_id": context.device["serial"], "preview_mode": "OFF",
+            "profile_id": identity["profile_id"], "execution_host": "Jetson",
+            "device_uid": identity["device_uid"],
+            "serial_number": identity["serial"], "preview_mode": "OFF",
             "host_gstreamer_available": False, "automation_validation": True,
         }
-
     def _run_mode(self, context, definition, resolution_key, width, height, fps, min_frames):
         payload = {**self._base_payload(context), "resolution_key": resolution_key,
                    "resolution": f"{width} x {height}", "fps": fps, "pixel_format": "BGRA"}
@@ -44,7 +106,22 @@ class CameraHandlerBase:
         # Pessimistic ownership makes cleanup issue STOP even if START times out
         # after the remote worker was launched but before confirmation arrived.
         self.stream_active = True
-        started = context.services["remote_client"].camera("start_stream", payload, timeout=15)
+        try:
+            started = context.services["remote_client"].camera("start_stream", payload, timeout=15)
+        except Exception as exc:
+            message = str(exc).casefold()
+            if "already running" in message or "already in use" in message or "camera busy" in message:
+                # A manager conflict means this test did not create the worker;
+                # never run cleanup STOP against another owner's stream.
+                self.stream_active = False
+                prerequisites = dict(context.base_configuration.get("camera_prerequisites") or {})
+                prerequisites["exclusive_sdk_access_available"] = "FAIL"
+                _raise_prerequisite_block(
+                    "Camera SDK is currently owned by another active stream. "
+                    "Stop that stream before running exclusive Direct SDK automation.",
+                    prerequisites,
+                )
+            raise
         samples, last = [], started.get("status", {})
         while int(last.get("valid_frame_count", 0)) < min_frames:
             context.checkpoint(time.monotonic())
@@ -74,6 +151,15 @@ class CameraHandlerBase:
             "continuous_grab_failure": bool(final.get("last_error")),
             "camera_disconnect_count": 0 if final.get("state") in ("stopped", "stopping") else 1,
         }
+
+
+def _raise_prerequisite_block(reason, prerequisites):
+    error = TestBlockedError(reason)
+    error.diagnostics = {
+        "blocked_reason": reason,
+        "prerequisites": dict(prerequisites),
+    }
+    raise error
 
 
 class BasicGrabHandler(CameraHandlerBase):
@@ -127,10 +213,10 @@ class ResolutionFpsHandler(CameraHandlerBase):
 class InvalidConfigHandler(CameraHandlerBase):
     def execute(self, context, definition):
         base = self._base_payload(context)
-        serial = int(context.device["serial"])
+        serial = int(camera_automation_identity(context.device)["serial"])
         good = {**base, "resolution_key": "HD1080", "resolution": "1920 x 1080", "fps": 30, "pixel_format": "BGRA"}
         cases = [
-            ("INVALID_SERIAL", {**good, "device_id": str(serial + 999999999)}),
+            ("INVALID_SERIAL", {**good, "serial_number": str(serial + 999999999)}),
             ("INVALID_RESOLUTION", {**good, "resolution_key": "UNSUPPORTED"}),
             ("INVALID_FPS", {**good, "resolution_key": "HD4K", "resolution": "3840 x 2160", "fps": 60}),
             ("INVALID_FPS", {**good, "fps": 0}), ("INVALID_FPS", {**good, "fps": -1}),

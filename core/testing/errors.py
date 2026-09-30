@@ -20,3 +20,9 @@ class TestCancelledError(TestFrameworkError):
 
 class TestTimeoutError(TestFrameworkError):
     code = "TEST_TIMEOUT"
+
+
+class RemoteOperationTimeoutError(TestTimeoutError):
+    """A bounded remote-operation deadline, distinct from test logic timeout."""
+
+    code = "REMOTE_OPERATION_TIMEOUT"

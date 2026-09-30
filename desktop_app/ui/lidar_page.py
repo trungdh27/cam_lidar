@@ -5,7 +5,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -46,7 +45,7 @@ from desktop_app.state.lidar_runtime_state import (
     LidarRuntimeState,
     LidarStreamStatus,
 )
-from desktop_app.ui.widgets import Card, StatusChip
+from desktop_app.ui.widgets import Card, StatusChip, ClickWheelComboBox
 from devices.livox.profile import (
     LivoxNetworkProfile,
     load_default_livox_profile,
@@ -300,7 +299,7 @@ class LidarPage(QWidget):
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model:"))
 
-        self.model_combo = QComboBox()
+        self.model_combo = ClickWheelComboBox()
         for model_name, model_profile in self.network_profile.models.items():
             self.model_combo.addItem(
                 model_profile.display_name,
@@ -489,18 +488,18 @@ class LidarPage(QWidget):
         self.test_search.setPlaceholderText("Search by ID or test name")
         self.test_search.textChanged.connect(self._apply_test_filters)
         filters.addWidget(self.test_search, 2)
-        self.test_group_filter = QComboBox()
+        self.test_group_filter = ClickWheelComboBox()
         self.test_group_filter.addItem("All Groups", None)
         for group in sorted({item.group for item in self.test_case_catalog}):
             self.test_group_filter.addItem(group, group)
         self.test_group_filter.currentIndexChanged.connect(self._apply_test_filters)
         filters.addWidget(self.test_group_filter)
-        self.test_automation_filter = QComboBox()
+        self.test_automation_filter = ClickWheelComboBox()
         for label, value in (("All", None), ("Auto", "AUTO"), ("Guided", "GUIDED"), ("Manual", "MANUAL")):
             self.test_automation_filter.addItem(label, value)
         self.test_automation_filter.currentIndexChanged.connect(self._apply_test_filters)
         filters.addWidget(self.test_automation_filter)
-        self.test_status_filter = QComboBox()
+        self.test_status_filter = ClickWheelComboBox()
         self.test_status_filter.addItem("All Statuses", None)
         for status in ("NOT_RUN", "QUEUED", "RUNNING", "PASS", "FAIL", "ERROR", "SKIPPED", "CANCELLED"):
             self.test_status_filter.addItem(status.replace("_", " ").title(), status)

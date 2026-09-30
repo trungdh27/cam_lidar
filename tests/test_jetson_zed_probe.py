@@ -15,6 +15,25 @@ REAL_EXPLORER_OUTPUT = '''## Cam  0  ##
 ********************
 '''
 
+CURRENT_ROBOT_EXPLORER_OUTPUT = '''## Cam 0 ##
+Model : "ZED X Mini"
+S/N   : 53204228
+State : "NOT AVAILABLE"
+Path  : /dev/i2c-9
+ID    : 0
+Port  : 1
+Type  : "GMSL"
+
+## Cam 1 ##
+Model : "ZED XOne UHD"
+S/N   : 315369161
+State : "AVAILABLE"
+Path  : /dev/i2c-10
+ID    : 1
+Port  : 3
+Type  : "GMSL"
+'''
+
 
 def _probe_namespace():
     namespace = {"__name__": "jetson_zed_probe_test"}
@@ -44,6 +63,33 @@ def _candidate(model, serial, **extra):
 
 
 class JetsonZedExplorerParserTests(unittest.TestCase):
+    def test_current_robot_two_camera_explorer_output_is_retained_verbatim(self):
+        namespace = _probe_namespace()
+        namespace["shutil"] = types.SimpleNamespace(which=lambda _command: "ZED_Explorer")
+        namespace["subprocess"] = types.SimpleNamespace(
+            run=lambda *args, **kwargs: types.SimpleNamespace(
+                stdout=CURRENT_ROBOT_EXPLORER_OUTPUT, stderr="", returncode=0
+            )
+        )
+        devices, error = namespace["explorer_devices"]("5.4.1")
+        self.assertIsNone(error)
+        self.assertEqual(len(devices), 2)
+        self.assertEqual(
+            [
+                (item["model"], item["serial_number"], item["state"], item["device_path"], item["camera_id"], item["port"], item["interface"])
+                for item in devices
+            ],
+            [
+                ("ZED X Mini", "53204228", "NOT AVAILABLE", "/dev/i2c-9", "0", "1", "GMSL"),
+                ("ZED XOne UHD", "315369161", "AVAILABLE", "/dev/i2c-10", "1", "3", "GMSL"),
+            ],
+        )
+
+    def test_xone_uhd_aliases_map_to_the_4k_family(self):
+        namespace = _probe_namespace()
+        for model in ("ZED XOne UHD", "ZED X One UHD", "ZED X One 4K"):
+            with self.subTest(model=model):
+                self.assertEqual(namespace["model_family"](model), "zed_x_one_4k")
     def test_exact_real_explorer_block(self):
         namespace = _probe_namespace()
         namespace["shutil"] = types.SimpleNamespace(
@@ -188,6 +234,33 @@ class JetsonZedReconciliationTests(unittest.TestCase):
             _candidate("ZED X Mini", "-"),
         ])
         self.assertEqual(len(devices), 2)
+
+    def test_explorer_is_supplemental_when_cameraone_already_lists_a_camera(self):
+        namespace = _probe_namespace()
+        explorer = [
+            _candidate("ZED X Mini", "53204228", state="NOT AVAILABLE", api="ZED_Explorer --all"),
+            _candidate("ZED XOne UHD", "315369161", state="AVAILABLE", api="ZED_Explorer --all"),
+        ]
+        namespace["explorer_devices"] = lambda _version: (explorer, None)
+
+        class Camera:
+            @staticmethod
+            def get_device_list():
+                return []
+
+        class CameraOne:
+            @staticmethod
+            def get_device_list():
+                return [types.SimpleNamespace(
+                    camera_model="ZED XOne UHD", serial_number="315369161",
+                    id=1, camera_state="AVAILABLE", input_type="GMSL"
+                )]
+
+        devices, error = namespace["all_zed_devices"](
+            types.SimpleNamespace(Camera=Camera, CameraOne=CameraOne), "5.4.1"
+        )
+        self.assertIsNone(error)
+        self.assertEqual({item["serial_number"] for item in devices}, {"53204228", "315369161"})
 
 
 if __name__ == "__main__":

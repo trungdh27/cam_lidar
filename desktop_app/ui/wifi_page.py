@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from desktop_app.ui.widgets import ClickWheelComboBox
+
 from desktop_app.wifi.catalog import (ENVIRONMENTS, WifiTestCase, load_auto_catalog,
                                       load_catalog, load_config)
 from desktop_app.wifi.runtime import EVIDENCE_ROOT, METRIC_FIELDS, WifiAttempt, WifiRuntime, metric_kind
@@ -405,7 +407,7 @@ class WifiPreTestPage(QWidget):
             layout.addWidget(QLabel(label))
             value = getattr(runtime.auto_setup, key)
             if key in confirmations:
-                control = QComboBox()
+                control = ClickWheelComboBox()
                 control.addItems(("NOT READY", "READY"))
                 control.setCurrentIndex(int(bool(value)))
             else:
@@ -425,7 +427,7 @@ class WifiPreTestPage(QWidget):
             else:
                 advanced_grid.addWidget(row)
         for key in self.detected_auto_fields:
-            control = QComboBox(self)
+            control = ClickWheelComboBox(self)
             control.addItems(("NOT DETECTED", "READY (DETECTED)"))
             control.setEnabled(False)
             control.hide()
@@ -1006,7 +1008,7 @@ class WifiEnvironmentPage(QWidget):
         if self.suite != "AUTO":
             definitions.append(("Mode", ("All", "AUTO", "GUIDED", "MANUAL")))
         for name, values in definitions:
-            combo = QComboBox()
+            combo = ClickWheelComboBox()
             combo.addItems(values)
             combo.currentTextChanged.connect(self._populate_table)
             self.filters[name] = combo
@@ -1754,10 +1756,10 @@ class WifiEnvironmentPage(QWidget):
             import_layout = QVBoxLayout(self.import_widget)
             import_layout.setContentsMargins(0, 0, 0, 0)
             import_row = QHBoxLayout()
-            self.output_direction = QComboBox()
+            self.output_direction = ClickWheelComboBox()
             self.output_direction.addItems(("Upload", "Download"))
             self.output_direction.hide()
-            self.output_band = QComboBox()
+            self.output_band = ClickWheelComboBox()
             self.output_band.addItems(("2.4 GHz", "5 GHz"))
             self.output_band.hide()
             self.raw_input = QPlainTextEdit()
@@ -1816,7 +1818,7 @@ class WifiEnvironmentPage(QWidget):
         measurement = QHBoxLayout(self.measurement_widget)
         measurement.setContentsMargins(0, 0, 0, 0)
         measurement.addWidget(QLabel("Record measured value:"))
-        self.metric_name = QComboBox()
+        self.metric_name = ClickWheelComboBox()
         self.metric_value = QLineEdit()
         self.metric_value.setPlaceholderText("Observed value (number or text)")
         self.record_metric = button("RECORD")
